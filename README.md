@@ -1,8 +1,6 @@
 # LegacyChain
 
-Decentralized inheritance system built on Ethereum. The idea is simple: you lock your crypto assets in a smart contract, assign heirs, and if you stop "checking in" (pinging), the assets automatically get distributed to your beneficiaries.
-
-I built this for the CENG 3550 (Decentralized Systems) course and later submitted it to Teknofest 2025 Blockchain competition.
+A decentralized digital inheritance protocol on Ethereum. LegacyChain allows users to securely lock crypto assets in a smart contract vault, assign multiple heirs with percentage-based shares, and automate the inheritance distribution through a combination of inactivity detection and decentralized oracle consensus.
 
 ## Screenshots
 
@@ -12,44 +10,66 @@ I built this for the CENG 3550 (Decentralized Systems) course and later submitte
 
 ![Protocol Architecture](screenshots/architecture.png)
 
-## How it works
+## Overview
 
-The owner deploys a contract with a time limit (e.g. 300 seconds for demo, much longer in practice). They need to call `ping()` periodically to prove they're still around. If the timer runs out or an oracle confirms death, heirs can claim their share.
+Traditional inheritance systems rely on centralized intermediaries — banks, lawyers, courts. LegacyChain replaces all of that with trustless, on-chain logic:
+
+- **Vault deployment** — The owner deposits ETH into a smart contract and defines a list of beneficiaries with percentage-based allocation
+- **Proof-of-Life mechanism** — The owner periodically confirms activity via `ping()`. An autonomous activity tracker (Ghost Ping) also monitors on-chain interactions
+- **Oracle consensus** — A decentralized oracle network can independently verify inactivity and trigger the inheritance process without waiting for the timer
+- **Grace period** — Before any transfer executes, a configurable grace period gives the owner a final window to cancel if the trigger was a false alarm
+- **Automated distribution** — Once confirmed, the vault distributes funds to all active heirs based on their assigned percentages — no manual intervention needed
+
+## Architecture
 
 ```
-Owner deploys contract → sets heirs + time limit
-        ↓
-Owner periodically calls ping() → timer resets
-        ↓
-Timer expires OR oracle signal → heirs can claim funds
+┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│   Owner      │────▶│  Smart Contract   │◀────│  Oracle Network  │
+│  (Vault)     │     │  (Vault Logic)    │     │  (Death Signal)  │
+└─────────────┘     └──────────────────┘     └──────────────────┘
+                            │
+              ┌─────────────┼─────────────┐
+              ▼             ▼             ▼
+        ┌──────────┐ ┌──────────┐ ┌──────────┐
+        │  Heir 1  │ │  Heir 2  │ │  Heir N  │
+        │  (40%)   │ │  (35%)   │ │  (25%)   │
+        └──────────┘ └──────────┘ └──────────┘
 ```
 
-## What's in here
+## Core Features
 
-- **Solidity contracts** — `Inheritance.sol` (basic version) and `MultiHeirInheritance.sol` (advanced with multi-heir, timelock, reentrancy guard)
-- **Frontend** — Single-page app that connects to MetaMask, shows a live countdown, and lets the owner ping or withdraw
-- **Test suite** — 40 tests covering access control, reentrancy, timelock, edge cases, gas optimization
-- **Whitepaper** — [WHITEPAPER.md](WHITEPAPER.md)
+### Security Layer
+- **ReentrancyGuard** — Prevents recursive call exploits on all fund-transfer functions
+- **TimeLock mechanism** — Any heir modification requires a 24-hour waiting period before execution, protecting against coercion or unauthorized changes
+- **Multi-sig emergency protocol** — Critical operations (like emergency withdrawals) require 2-of-3 multi-signature approval
+- **Access control** — Role-based permissions for owner, oracle, and heirs with strict modifier checks
 
-## Main features
+### Inheritance Engine
+- **Multi-heir support** — Up to 10 beneficiaries with named entries and percentage-based allocation
+- **Decentralized Oracle** — Independent oracle contract that monitors owner activity and provides death/inactivity signals to the vault
+- **Grace Period system** — Configurable safety window between trigger detection and fund distribution
+- **Ghost Ping (Autonomous Activity Tracking)** — Automatically records owner's on-chain activity without requiring manual pings
 
-- **Multi-heir support** — Up to 10 beneficiaries with percentage-based distribution
-- **TimeLock** — 24-hour delay before heir changes take effect (prevents coercion)
-- **ReentrancyGuard** — Standard protection against recursive call attacks
-- **Multi-sig emergency** — 2-of-3 approval for critical operations
-- **Oracle integration** — Simulated oracle for immediate death signal
-- **Emergency withdraw** — Owner can pull funds back anytime
+### Smart Contracts
 
-## Tech
+| Contract | Description |
+|----------|-------------|
+| `MultiHeirInheritance.sol` | Main vault contract — multi-heir management, timelock, oracle integration, reentrancy protection, grace period logic |
+| `DecentralizedOracle.sol` | Oracle contract — monitors activity, provides consensus-based death signals |
+| `Inheritance.sol` | Lightweight single-heir version for simpler use cases |
+| `MockERC20.sol` | Test token for ERC-20 inheritance scenarios |
 
-| | |
-|-|-|
-| Blockchain | Ethereum (Sepolia testnet) |
-| Contracts | Solidity ^0.8.0 |
-| Frontend | HTML + JS + Ethers.js v5.7 |
-| Dev tools | Hardhat, Remix IDE |
+## Tech Stack
 
-## Running locally
+| Component | Technology |
+|-----------|------------|
+| Blockchain | Ethereum (Sepolia Testnet) |
+| Smart Contracts | Solidity ^0.8.0 |
+| Frontend | React (via CDN) + Tailwind CSS + Ethers.js v5.7 |
+| Testing | Hardhat + Chai (40 tests) |
+| Security | ReentrancyGuard, TimeLock, Multi-sig |
+
+## Getting Started
 
 ```bash
 git clone https://github.com/berzanunsal1621-max/LegacyChain.git
@@ -59,36 +79,21 @@ npx http-server . -p 8080
 # open http://127.0.0.1:8080
 ```
 
-To deploy the contract, use Remix IDE with MetaMask (Injected Provider → Sepolia). Copy the contract address into `index.html`.
+Deploy via Remix IDE → Injected Provider (MetaMask) → Sepolia network. Paste the deployed contract address into `index.html`.
 
-## Tests
+## Testing
 
 ```bash
-npx hardhat test                          # run all
-npx hardhat test test/security-test.js    # basic tests (10)
-npx hardhat test test/multi-heir-test.js  # advanced tests (30)
+npx hardhat test                          # all 40 tests
+npx hardhat test test/security-test.js    # access control, reentrancy (10)
+npx hardhat test test/multi-heir-test.js  # heir management, timelock, distribution (30)
 ```
 
-Tests cover: access control, multi-heir management, timelock mechanism, inheritance distribution, reentrancy protection, timer logic, edge cases, and gas optimization.
+Test coverage includes: access control, multi-heir CRUD, timelock enforcement, inheritance claim flow, reentrancy attack simulation, timer edge cases, oracle signal handling, and gas optimization benchmarks.
 
-## Contract overview
+## Documentation
 
-The main contract is `MultiHeirInheritance.sol`:
-
-```solidity
-// Key state
-address public owner;
-address public oracle;
-uint256 public lastSeen;     // last ping timestamp
-uint256 public timeLimit;    // inactivity threshold
-
-// Key functions
-ping()                    // owner proves they're alive
-simulateOracleSignal()    // oracle confirms death
-claimInheritance()        // heir claims when timeLeft == 0
-emergencyWithdraw()       // owner reclaims everything
-addHeir()                 // add beneficiary with % share
-```
+- [Whitepaper](WHITEPAPER.md) — Full protocol specification, threat model, and design rationale
 
 ## Author
 
