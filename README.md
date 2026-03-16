@@ -8,6 +8,8 @@ I built this for the CENG 3550 (Decentralized Systems) course and later submitte
 
 ![Homepage](screenshots/homepage.png)
 
+![Dashboard](screenshots/dashboard-preview.png)
+
 ![Protocol Architecture](screenshots/architecture.png)
 
 ## How it works
