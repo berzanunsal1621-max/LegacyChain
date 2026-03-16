@@ -1283,22 +1283,7 @@
                             <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setCurrentView('dashboard')}>
                                 <div className="relative">
                                     <div className="absolute inset-0 bg-brand-blue blur-lg opacity-20 group-hover:opacity-40 transition-opacity"></div>
-                                    <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="object-contain hexagon-clip relative z-10">
-    <path d="M50 5L93.3013 30V80L50 95L6.69873 80V30L50 5Z" fill="url(#paint0_linear)" fillOpacity="0.1" stroke="#3B82F6" strokeWidth="2"/>
-    <path d="M50 15L84.641 35V75L50 85L15.359 75V35L50 15Z" fill="url(#paint1_linear)" stroke="#6366F1" strokeWidth="1.5"/>
-    <circle cx="50" cy="50" r="15" fill="#3B82F6"/>
-    <path d="M45 50L55 40V60L45 50Z" fill="white"/>
-    <defs>
-        <linearGradient id="paint0_linear" x1="50" y1="5" x2="50" y2="95" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#3B82F6"/>
-            <stop offset="1" stopColor="#8B5CF6"/>
-        </linearGradient>
-        <linearGradient id="paint1_linear" x1="50" y1="15" x2="50" y2="85" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#3B82F6"/>
-            <stop offset="1" stopColor="#6366F1"/>
-        </linearGradient>
-    </defs>
-</svg>
+                                    <img src="logo.png" alt="LegacyChain Logo" className="h-10 w-auto object-contain hexagon-clip relative z-10" />
                                 </div>
                                 <span className="text-xl font-black tracking-tight"><span className="text-gray-900 dark:text-white">Legacy</span><span className="brand-gradient">Chain</span> <span className="text-gray-400 font-bold text-[10px] ml-2 uppercase tracking-widest hidden md:inline">{currentView === 'profile' ? 'Profile' : 'Protocol'}</span></span>
                             </div>
@@ -2008,22 +1993,7 @@
                     <nav className="fixed w-full z-50 bg-white/95 dark:bg-brand-dark/95 backdrop-blur-sm border-b border-gray-100 dark:border-gray-800 transition-colors">
                         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between relative">
                             <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.location.reload()}>
-                                <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="object-contain hexagon-clip ">
-    <path d="M50 5L93.3013 30V80L50 95L6.69873 80V30L50 5Z" fill="url(#paint0_linear)" fillOpacity="0.1" stroke="#3B82F6" strokeWidth="2"/>
-    <path d="M50 15L84.641 35V75L50 85L15.359 75V35L50 15Z" fill="url(#paint1_linear)" stroke="#6366F1" strokeWidth="1.5"/>
-    <circle cx="50" cy="50" r="15" fill="#3B82F6"/>
-    <path d="M45 50L55 40V60L45 50Z" fill="white"/>
-    <defs>
-        <linearGradient id="paint0_linear" x1="50" y1="5" x2="50" y2="95" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#3B82F6"/>
-            <stop offset="1" stopColor="#8B5CF6"/>
-        </linearGradient>
-        <linearGradient id="paint1_linear" x1="50" y1="15" x2="50" y2="85" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#3B82F6"/>
-            <stop offset="1" stopColor="#6366F1"/>
-        </linearGradient>
-    </defs>
-</svg>
+                                <img src="logo.png" alt="LegacyChain Logo" className="h-10 w-auto object-contain hexagon-clip relative z-10" />
                                 <span className="text-2xl font-bold tracking-tight"><span className="text-gray-900 dark:text-white">Legacy</span><span className={darkMode ? 'brand-gradient' : 'brand-gradient-light'}>Chain</span></span>
                             </div>
                             <div className="hidden md:flex h-full items-center">
@@ -2115,18 +2085,7 @@
                                 </div>
                                 <div className="relative w-64 h-64 lg:w-80 lg:h-80 flex-shrink-0 animate-float">
                                     <div className="absolute inset-4 bg-blue-500/10 rounded-full blur-3xl animate-pulse-slow"></div>
-                                    <svg viewBox="0 0 200 200" className="relative z-10 w-full h-full drop-shadow-[0_10px_30px_rgba(59,130,246,0.4)]">
-    <defs>
-        <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#3B82F6"/>
-            <stop offset="100%" stopColor="#1E40AF"/>
-        </linearGradient>
-    </defs>
-    <path d="M100 20 L170 50 V100 C170 150 100 180 100 180 C100 180 30 150 30 100 V50 L100 20 Z" fill="url(#shieldGrad)" stroke="#60A5FA" strokeWidth="4" strokeLinejoin="round"/>
-    <path d="M100 40 L150 65 V100 C150 135 100 160 100 160 C100 160 50 135 50 100 V65 Z" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="2"/>
-    <circle cx="100" cy="100" r="25" fill="#60A5FA"/>
-    <path d="M90 100 L95 105 L110 90" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round"/>
-</svg>
+                                    <img src="security_shield.png" alt="Security Shield" className="relative z-10 w-full h-full object-contain drop-shadow-[0_20px_50px_rgba(59,130,246,0.4)] hover:scale-105 transition duration-500" />
                                 </div>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -2419,22 +2378,7 @@
                         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12">
                             <div className="space-y-6">
                                 <div className="flex items-center gap-3">
-                                    <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="object-contain hexagon-clip ">
-    <path d="M50 5L93.3013 30V80L50 95L6.69873 80V30L50 5Z" fill="url(#paint0_linear)" fillOpacity="0.1" stroke="#3B82F6" strokeWidth="2"/>
-    <path d="M50 15L84.641 35V75L50 85L15.359 75V35L50 15Z" fill="url(#paint1_linear)" stroke="#6366F1" strokeWidth="1.5"/>
-    <circle cx="50" cy="50" r="15" fill="#3B82F6"/>
-    <path d="M45 50L55 40V60L45 50Z" fill="white"/>
-    <defs>
-        <linearGradient id="paint0_linear" x1="50" y1="5" x2="50" y2="95" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#3B82F6"/>
-            <stop offset="1" stopColor="#8B5CF6"/>
-        </linearGradient>
-        <linearGradient id="paint1_linear" x1="50" y1="15" x2="50" y2="85" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#3B82F6"/>
-            <stop offset="1" stopColor="#6366F1"/>
-        </linearGradient>
-    </defs>
-</svg>
+                                    <img src="logo.png" alt="LegacyChain Logo" className="h-10 w-auto object-contain hexagon-clip relative z-10" />
                                     <span className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">Legacy<span className="brand-gradient">Chain</span></span>
                                 </div>
                                 <p className="text-gray-400 text-sm leading-relaxed">The future of secure, automated digital inheritance. Securely decentralized.</p>
