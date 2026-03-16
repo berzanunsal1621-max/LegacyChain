@@ -1,5 +1,5 @@
 {
-  "name": "decentrelızedsystems_final_project",
+  "name": "legacychain",
   "version": "1.0.0",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",

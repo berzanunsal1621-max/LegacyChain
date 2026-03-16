@@ -26,3 +26,6 @@
 *.jpeg
 !screenshots/
 !screenshots/*.png
+!logo.png
+!hero-transparent.png
+!security_shield.png
