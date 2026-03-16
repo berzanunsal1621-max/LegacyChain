@@ -24,4 +24,5 @@
 *.png
 *.jpg
 *.jpeg
-/screenshots
+!screenshots/
+!screenshots/*.png

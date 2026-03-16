@@ -4,6 +4,12 @@ Decentralized inheritance system built on Ethereum. The idea is simple: you lock
 
 I built this for the CENG 3550 (Decentralized Systems) course and later submitted it to Teknofest 2025 Blockchain competition.
 
+## Screenshots
+
+![Homepage](screenshots/homepage.png)
+
+![Protocol Architecture](screenshots/architecture.png)
+
 ## How it works
 
 The owner deploys a contract with a time limit (e.g. 300 seconds for demo, much longer in practice). They need to call `ping()` periodically to prove they're still around. If the timer runs out or an oracle confirms death, heirs can claim their share.
