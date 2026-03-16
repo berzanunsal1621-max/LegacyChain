@@ -19,3 +19,9 @@
 # Hardhat coverage reports
 /coverage
 .env
+
+# Large image assets (served locally)
+*.png
+*.jpg
+*.jpeg
+/screenshots
