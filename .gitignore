@@ -32,3 +32,13 @@
 !logo.png
 !hero-transparent.png
 !security_shield.png
+
+# Personal / non-project files
+*.pdf
+*.docx
+TeknofestRaporları/
+hackathon2026/
+generate_odr.py
+parse_transcript.js
+implementation_plan.md
+oracle_v2_blueprint.md
