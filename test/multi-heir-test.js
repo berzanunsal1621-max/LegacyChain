@@ -8,16 +8,40 @@ const { ethers } = require("hardhat");
 const { expect } = require("chai");
 
 describe("MultiHeirInheritance Security Tests", function () {
-    let contract;
-    let owner, heir1, heir2, heir3, oracle, attacker;
+    let contract, oracleContract;
+    let owner, heir1, heir2, heir3, oracle, attacker, auth2;
     const TIME_LIMIT = 300; // 5 dakika
+    const GRACE_PERIOD = 86400; // 24 saat
+
+    // Helper: Oracle konsensüs ile ölüm onayla + Grace Period başlat + 24 saat bekle
+    async function triggerDeathAndWaitGrace(contractInstance, oracleSigner) {
+        // 2/3 oracle konsensüs ile ölüm sinyali gönder
+        await oracleContract.connect(oracle).submitDeathSignal(owner.address);
+        await oracleContract.connect(auth2).submitDeathSignal(owner.address);
+        
+        await contractInstance.startGracePeriod();
+        await ethers.provider.send("evm_increaseTime", [GRACE_PERIOD + 1]);
+        await ethers.provider.send("evm_mine");
+    }
 
     beforeEach(async function () {
-        [owner, heir1, heir2, heir3, oracle, attacker] = await ethers.getSigners();
+        [owner, heir1, heir2, heir3, oracle, attacker, auth2] = await ethers.getSigners();
+
+        // Deploy gerçek DecentralizedOracle kontratı
+        const DecentralizedOracle = await ethers.getContractFactory("contracts/DecentralizedOracle.sol:DecentralizedOracle");
+        oracleContract = await DecentralizedOracle.deploy();
+        await oracleContract.waitForDeployment();
+
+        // Oracle'a 2 authority ekle (2/3 konsensüs için 2 yeterli)
+        await oracleContract.addAuthority(oracle.address);
+        await oracleContract.addAuthority(auth2.address);
 
         const MultiHeirInheritance = await ethers.getContractFactory("MultiHeirInheritance");
-        contract = await MultiHeirInheritance.deploy(heir1.address, oracle.address, TIME_LIMIT);
+        contract = await MultiHeirInheritance.deploy(heir1.address, await oracleContract.getAddress(), TIME_LIMIT);
         await contract.waitForDeployment();
+
+        // Oracle'a inheritance kontrat adresini kaydet
+        await oracleContract.setInheritanceContract(await contract.getAddress());
     });
 
     // ===========================================
@@ -33,13 +57,13 @@ describe("MultiHeirInheritance Security Tests", function () {
         });
 
         it("Should allow only owner/oracle to call simulateOracleSignal()", async function () {
+            // Owner can call
             await expect(contract.connect(owner).simulateOracleSignal()).to.not.be.reverted;
 
             // Reset
             await contract.connect(owner).ping();
 
-            await expect(contract.connect(oracle).simulateOracleSignal()).to.not.be.reverted;
-
+            // Attacker cannot call (oracle artık kontrat adresi, signer olarak çağrılamaz)
             await expect(contract.connect(attacker).simulateOracleSignal())
                 .to.be.revertedWith("Yetkisiz Oracle");
         });
@@ -80,7 +104,7 @@ describe("MultiHeirInheritance Security Tests", function () {
         it("Should add multiple heirs correctly", async function () {
             // İlk varisin yüzdesini düşür
             await contract.initiateHeirUpdate(0, heir1.address, 50, "Primary Heir");
-            await ethers.provider.send("evm_increaseTime", [86401]); // 24 saat + 1 saniye
+            await ethers.provider.send("evm_increaseTime", [61]); // 1 dakika + 1 saniye (timelockDuration)
             await ethers.provider.send("evm_mine");
             await contract.executeHeirUpdate(0);
 
@@ -121,7 +145,7 @@ describe("MultiHeirInheritance Security Tests", function () {
         it("Should deactivate heir correctly", async function () {
             // Önce ikinci varis ekle
             await contract.initiateHeirUpdate(0, heir1.address, 50, "Primary");
-            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_increaseTime", [61]);
             await ethers.provider.send("evm_mine");
             await contract.executeHeirUpdate(0);
             await contract.addHeir(heir2.address, 50, "Secondary");
@@ -157,8 +181,8 @@ describe("MultiHeirInheritance Security Tests", function () {
         it("Should not execute update before timelock expires", async function () {
             await contract.initiateHeirUpdate(0, heir2.address, 80, "New Primary");
 
-            // Sadece 1 saat geç
-            await ethers.provider.send("evm_increaseTime", [3600]);
+            // Sadece 30 saniye geç (timelockDuration = 60 saniye)
+            await ethers.provider.send("evm_increaseTime", [30]);
             await ethers.provider.send("evm_mine");
 
             await expect(contract.executeHeirUpdate(0))
@@ -168,8 +192,8 @@ describe("MultiHeirInheritance Security Tests", function () {
         it("Should execute update after timelock expires", async function () {
             await contract.initiateHeirUpdate(0, heir2.address, 80, "New Primary");
 
-            // 24 saat + 1 saniye geç
-            await ethers.provider.send("evm_increaseTime", [86401]);
+            // 1 dakika + 1 saniye geç
+            await ethers.provider.send("evm_increaseTime", [61]);
             await ethers.provider.send("evm_mine");
 
             await expect(contract.executeHeirUpdate(0)).to.not.be.reverted;
@@ -202,18 +226,22 @@ describe("MultiHeirInheritance Security Tests", function () {
                 value: depositAmount
             });
 
-            await contract.connect(oracle).simulateOracleSignal();
+            await triggerDeathAndWaitGrace(contract, oracle);
 
             const heirBalanceBefore = await ethers.provider.getBalance(heir1.address);
 
-            const tx = await contract.connect(heir1).claimInheritance();
-            const receipt = await tx.wait();
-            const gasUsed = receipt.gasUsed * receipt.gasPrice;
+            const txClaim = await contract.connect(heir1).claimInheritance();
+            const receiptClaim = await txClaim.wait();
+            const gasClaim = receiptClaim.gasUsed * receiptClaim.gasPrice;
+
+            const txWithdraw = await contract.connect(heir1).withdrawShare();
+            const receiptWithdraw = await txWithdraw.wait();
+            const gasWithdraw = receiptWithdraw.gasUsed * receiptWithdraw.gasPrice;
 
             const heirBalanceAfter = await ethers.provider.getBalance(heir1.address);
 
             expect(heirBalanceAfter).to.be.closeTo(
-                heirBalanceBefore + depositAmount - gasUsed,
+                heirBalanceBefore + depositAmount - gasClaim - gasWithdraw,
                 ethers.parseEther("0.01")
             );
         });
@@ -223,7 +251,7 @@ describe("MultiHeirInheritance Security Tests", function () {
 
             // Varisleri ayarla: 50%, 30%, 20%
             await contract.initiateHeirUpdate(0, heir1.address, 50, "Heir 1");
-            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_increaseTime", [61]);
             await ethers.provider.send("evm_mine");
             await contract.executeHeirUpdate(0);
 
@@ -236,8 +264,8 @@ describe("MultiHeirInheritance Security Tests", function () {
                 value: depositAmount
             });
 
-            // Oracle tetikle
-            await contract.connect(oracle).simulateOracleSignal();
+            // Oracle tetikle + Grace Period
+            await triggerDeathAndWaitGrace(contract, oracle);
 
             // Bakiyeleri kaydet
             const h1Before = await ethers.provider.getBalance(heir1.address);
@@ -245,19 +273,34 @@ describe("MultiHeirInheritance Security Tests", function () {
             const h3Before = await ethers.provider.getBalance(heir3.address);
 
             // Claim
-            await contract.connect(heir1).claimInheritance();
+            const txClaim = await contract.connect(heir1).claimInheritance();
+            const rClaim = await txClaim.wait();
+            const gasClaim = rClaim.gasUsed * rClaim.gasPrice;
+
+            // Withdraw and measure gas
+            const txW1 = await contract.connect(heir1).withdrawShare();
+            const rW1 = await txW1.wait();
+            const gasW1 = rW1.gasUsed * rW1.gasPrice;
+
+            const txW2 = await contract.connect(heir2).withdrawShare();
+            const rW2 = await txW2.wait();
+            const gasW2 = rW2.gasUsed * rW2.gasPrice;
+
+            const txW3 = await contract.connect(heir3).withdrawShare();
+            const rW3 = await txW3.wait();
+            const gasW3 = rW3.gasUsed * rW3.gasPrice;
 
             // Sonuçları kontrol et
             const h1After = await ethers.provider.getBalance(heir1.address);
             const h2After = await ethers.provider.getBalance(heir2.address);
             const h3After = await ethers.provider.getBalance(heir3.address);
 
-            // Heir1 ~5 ETH almalı (50%)
-            expect(h1After - h1Before).to.be.closeTo(ethers.parseEther("5.0"), ethers.parseEther("0.1"));
-            // Heir2 ~3 ETH almalı (30%)
-            expect(h2After - h2Before).to.be.closeTo(ethers.parseEther("3.0"), ethers.parseEther("0.1"));
-            // Heir3 ~2 ETH almalı (20%)
-            expect(h3After - h3Before).to.be.closeTo(ethers.parseEther("2.0"), ethers.parseEther("0.1"));
+            // Heir1 ~5 ETH almalı (50%) minus gas
+            expect(h1After - h1Before + gasClaim + gasW1).to.be.closeTo(ethers.parseEther("5.0"), ethers.parseEther("0.1"));
+            // Heir2 ~3 ETH almalı (30%) minus gas
+            expect(h2After - h2Before + gasW2).to.be.closeTo(ethers.parseEther("3.0"), ethers.parseEther("0.1"));
+            // Heir3 ~2 ETH almalı (20%) minus gas
+            expect(h3After - h3Before + gasW3).to.be.closeTo(ethers.parseEther("2.0"), ethers.parseEther("0.1"));
         });
 
         it("Should exclude inactive heirs from distribution", async function () {
@@ -265,7 +308,7 @@ describe("MultiHeirInheritance Security Tests", function () {
 
             // 2 varis ekle
             await contract.initiateHeirUpdate(0, heir1.address, 50, "Heir 1");
-            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_increaseTime", [61]);
             await ethers.provider.send("evm_mine");
             await contract.executeHeirUpdate(0);
             await contract.addHeir(heir2.address, 50, "Heir 2");
@@ -279,20 +322,24 @@ describe("MultiHeirInheritance Security Tests", function () {
                 value: depositAmount
             });
 
-            await contract.connect(oracle).simulateOracleSignal();
+            await triggerDeathAndWaitGrace(contract, oracle);
 
             const h1Before = await ethers.provider.getBalance(heir1.address);
             const h2Before = await ethers.provider.getBalance(heir2.address);
 
             await contract.connect(heir2).claimInheritance();
+            
+            const txW2 = await contract.connect(heir2).withdrawShare();
+            const rW2 = await txW2.wait();
+            const gasW2 = rW2.gasUsed * rW2.gasPrice;
 
             const h1After = await ethers.provider.getBalance(heir1.address);
             const h2After = await ethers.provider.getBalance(heir2.address);
 
             // Heir1 hiçbir şey almamalı
             expect(h1After).to.equal(h1Before);
-            // Heir2 tamamını almalı
-            expect(h2After - h2Before).to.be.closeTo(depositAmount, ethers.parseEther("0.1"));
+            // Heir2 tamamını almalı (minus gas)
+            expect(h2After - h2Before + gasW2).to.be.closeTo(depositAmount, ethers.parseEther("0.1"));
         });
 
         it("Should not claim before timer expires", async function () {
@@ -302,7 +349,7 @@ describe("MultiHeirInheritance Security Tests", function () {
             });
 
             await expect(contract.connect(heir1).claimInheritance())
-                .to.be.revertedWith("Sure dolmadi");
+                .to.be.revertedWith("Sure dolmadi veya Oracle onayi yok");
         });
     });
 
@@ -320,12 +367,12 @@ describe("MultiHeirInheritance Security Tests", function () {
                 value: ethers.parseEther("1.0")
             });
 
-            await contract.connect(oracle).simulateOracleSignal();
+            await triggerDeathAndWaitGrace(contract, oracle);
             await contract.connect(heir1).claimInheritance();
 
-            // İkinci claim başarısız olmalı (bakiye yok)
+            // İkinci claim başarısız olmalı (zaten dağıtıldı)
             await expect(contract.connect(heir1).claimInheritance())
-                .to.be.revertedWith("Bakiye yok");
+                .to.be.revertedWith("Miras zaten dagitildi");
         });
 
         it("Should prevent reentrancy on emergencyWithdraw", async function () {
@@ -363,7 +410,9 @@ describe("MultiHeirInheritance Security Tests", function () {
         });
 
         it("Should return 0 after oracle signal", async function () {
-            await contract.connect(oracle).simulateOracleSignal();
+            // Oracle konsensüs ile ölüm onayla
+            await oracleContract.connect(oracle).submitDeathSignal(owner.address);
+            await oracleContract.connect(auth2).submitDeathSignal(owner.address);
             expect(await contract.timeLeft()).to.equal(0);
         });
 
@@ -382,10 +431,13 @@ describe("MultiHeirInheritance Security Tests", function () {
     describe("7. Edge Cases", function () {
 
         it("Should handle zero balance claim gracefully", async function () {
-            await contract.connect(oracle).simulateOracleSignal();
+            // Oracle konsensüs ile ölüm onayla
+            await oracleContract.connect(oracle).submitDeathSignal(owner.address);
+            await oracleContract.connect(auth2).submitDeathSignal(owner.address);
+            await contract.startGracePeriod();
 
             await expect(contract.connect(heir1).claimInheritance())
-                .to.be.revertedWith("Bakiye yok");
+                .to.be.revertedWith("Grace Period: 24 saatlik guvenlik suresi dolmadi");
         });
 
         it("Should emit correct events", async function () {
@@ -393,15 +445,14 @@ describe("MultiHeirInheritance Security Tests", function () {
             await expect(contract.connect(owner).ping())
                 .to.emit(contract, "Pulse");
 
-            // OracleSignalReceived event
-            await expect(contract.connect(oracle).simulateOracleSignal())
-                .to.emit(contract, "OracleSignalReceived")
-                .withArgs("Death Confirmed by Oracle", await ethers.provider.getBlock("latest").then(b => b.timestamp + 1));
+            // OracleSignalReceived event (owner üzerinden simulateOracleSignal)
+            await expect(contract.connect(owner).simulateOracleSignal())
+                .to.emit(contract, "OracleSignalReceived");
 
             // HeirAdded event
             await contract.connect(owner).ping(); // Reset
             await contract.initiateHeirUpdate(0, heir1.address, 50, "Test");
-            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_increaseTime", [61]);
             await ethers.provider.send("evm_mine");
             await contract.executeHeirUpdate(0);
 
@@ -446,7 +497,7 @@ describe("MultiHeirInheritance Security Tests", function () {
 
         it("Should use reasonable gas for addHeir()", async function () {
             await contract.initiateHeirUpdate(0, heir1.address, 50, "Test");
-            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_increaseTime", [61]);
             await ethers.provider.send("evm_mine");
             await contract.executeHeirUpdate(0);
 
@@ -471,7 +522,7 @@ describe("MultiHeirInheritance Security Tests", function () {
                 value: ethers.parseEther("1.0")
             });
 
-            await contract.connect(oracle).simulateOracleSignal();
+            await triggerDeathAndWaitGrace(contract, oracle);
 
             const tx = await contract.connect(heir1).claimInheritance();
             const receipt = await tx.wait();

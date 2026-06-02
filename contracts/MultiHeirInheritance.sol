@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 /**
  * @title MultiHeirInheritance - Gelişmiş Çoklu Varis Miras Sistemi
- * @author LegacyChain Team - Teknofest 2025
+ * @author LegacyChain Team - Teknofest 2026
  * @notice Bu kontrat birden fazla varisin yüzdelik pay ile miras almasını sağlar
  * @dev ReentrancyGuard ve TimeLock mekanizmaları ile güvenli miras transferi
  */
@@ -11,7 +11,17 @@ pragma solidity ^0.8.0;
 // OpenZeppelin IERC20 interface
 interface IERC20 {
     function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
     function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+}
+
+// OpenZeppelin IERC721 interface (NFT)
+interface IERC721 {
+    function transferFrom(address from, address to, uint256 tokenId) external;
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function isApprovedForAll(address owner, address operator) external view returns (bool);
+    function getApproved(uint256 tokenId) external view returns (address);
 }
 
 interface DecentralizedOracle {
@@ -50,7 +60,8 @@ contract MultiHeirInheritance is ReentrancyGuard {
     uint256 public timeLimit;
     
     // TimeLock için bekleme süresi (varis değişikliklerinde)
-    uint256 public constant TIMELOCK_DURATION = 1 minutes;
+    // Üretimde 24-48 saat olarak ayarlanmalı, test ortamında kısa tutulmuştur
+    uint256 public timelockDuration = 1 minutes;
     
     // Maksimum varis sayısı
     uint256 public constant MAX_HEIRS = 10;
@@ -92,6 +103,19 @@ contract MultiHeirInheritance is ReentrancyGuard {
     // Pending değişiklikler mapping
     mapping(uint256 => PendingChange) public pendingChanges;
     
+    // Spesifik varlık atamaları (NFT veya Token)
+    struct SpecificAsset {
+        address assetAddress;  // NFT veya Token kontrat adresi
+        uint256 tokenId;       // NFT ise ID, Token ise 0
+        uint256 amount;        // Token ise miktar, NFT ise 1
+        address designatedHeir;// Kime bırakılacağı
+        bool isERC721;         // Varlık tipi
+        bool isClaimed;        // Talep edildi mi?
+    }
+    
+    // Spesifik vasiyetler dizisi
+    SpecificAsset[] public specificWills;
+    
     // Emergency multi-sig için onay sayacı
     mapping(bytes32 => uint256) public emergencyApprovals;
     mapping(bytes32 => mapping(address => bool)) public hasApproved;
@@ -99,6 +123,18 @@ contract MultiHeirInheritance is ReentrancyGuard {
     // Trusted signers for emergency (owner + oracle + heir0)
     address[] public trustedSigners;
     uint256 public constant REQUIRED_SIGNATURES = 2;
+    
+    // Pull-over-Push pattern: Varisler kendi paylarını çeker
+    mapping(address => uint256) public pendingWithdrawals;
+    // Token bazlı pull-over-push
+    mapping(address => mapping(address => uint256)) public pendingTokenWithdrawals; // token => heir => amount
+    
+    // Miras talep edildi mi takibi (çift dağıtımı önlemek için)
+    bool public inheritanceClaimed;
+    mapping(address => bool) public tokenClaimed;
+    
+    // Emergency Pause Mechanism
+    bool public paused;
     
     // ============================================
     // EVENTS
@@ -115,6 +151,18 @@ contract MultiHeirInheritance is ReentrancyGuard {
     event TimeLockExecuted(uint256 indexed heirIndex);
     event EmergencyApprovalGiven(address indexed signer, bytes32 actionHash);
     event DepositReceived(address indexed from, uint256 amount);
+    event ShareAllocated(address indexed heir, uint256 amount);
+    event ShareWithdrawn(address indexed heir, uint256 amount);
+    event TokenShareAllocated(address indexed token, address indexed heir, uint256 amount);
+    event TokenShareWithdrawn(address indexed token, address indexed heir, uint256 amount);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    
+    // Specific Asset Events
+    event SpecificAssetAssigned(uint256 indexed willIndex, address indexed assetAddress, address designatedHeir);
+    event SpecificAssetClaimed(uint256 indexed willIndex, address indexed heir);
+    event SpecificAssetRemoved(uint256 indexed willIndex);
+    event ContractPaused(address indexed by, uint256 timestamp);
+    event ContractUnpaused(address indexed by, uint256 timestamp);
     
     // ============================================
     // MODIFIERS
@@ -139,6 +187,11 @@ contract MultiHeirInheritance is ReentrancyGuard {
             }
         }
         require(isTrusted, "Yetkisiz imzalayici");
+        _;
+    }
+    
+    modifier whenNotPaused() {
+        require(!paused, "Kontrat duraklatildi");
         _;
     }
     
@@ -192,6 +245,24 @@ contract MultiHeirInheritance is ReentrancyGuard {
     receive() external payable {
         emit DepositReceived(msg.sender, msg.value);
     }
+
+    function transferOwnership(address _newOwner) public onlyOwner {
+        require(_newOwner != address(0), "Gecersiz sahip adresi");
+
+        address previousOwner = owner;
+        owner = _newOwner;
+
+        for (uint256 i = 0; i < trustedSigners.length; i++) {
+            if (trustedSigners[i] == previousOwner) {
+                trustedSigners[i] = _newOwner;
+                emit OwnershipTransferred(previousOwner, _newOwner);
+                return;
+            }
+        }
+
+        trustedSigners.push(_newOwner);
+        emit OwnershipTransferred(previousOwner, _newOwner);
+    }
     
     // ============================================
     // CORE FUNCTIONS
@@ -200,7 +271,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
     /**
      * @notice Proof-of-Life: Sahip hayatta olduğunu kanıtlar
      */
-    function ping() external onlyOwner {
+    function ping() external onlyOwner whenNotPaused {
         lastSeen = block.timestamp;
         emit Pulse(lastSeen);
     }
@@ -269,7 +340,39 @@ contract MultiHeirInheritance is ReentrancyGuard {
     // ============================================
     
     /**
-     * @notice Yeni varis ekle
+     * @notice Yeni varis ekle (Şifreli - Commit/Reveal)
+     * @param _secretHash keccak256(wallet + name + salt)
+     * @param _percentage Miras yüzdesi
+     */
+    function addHeirHash(
+        bytes32 _secretHash,
+        uint256 _percentage
+    ) external onlyOwner whenNotPaused {
+        require(_secretHash != bytes32(0), "Gecersiz hash");
+        require(_percentage > 0 && _percentage < 100, "Yuzde 1-99 arasi olmali");
+        require(heirs.length < MAX_HEIRS, "Maksimum varis sayisina ulasildi");
+        
+        uint256 totalPercentage = _getTotalPercentage();
+        
+        if (totalPercentage + _percentage > 100) {
+            uint256 excess = (totalPercentage + _percentage) - 100;
+            require(heirs[0].percentage > excess, "Birinci varisin yuzdesi yetersiz");
+            heirs[0].percentage -= excess;
+        }
+        
+        heirs.push(Heir({
+            wallet: address(0), // Gizli
+            percentage: _percentage,
+            name: "Hidden Heir",
+            isActive: true,
+            secretHash: _secretHash
+        }));
+        
+        emit HeirAdded(address(0), _percentage, "Hidden Heir");
+    }
+    
+    /**
+     * @notice Yeni varis ekle (Açık - Mevcut sistem)
      * @param _wallet Varis cüzdan adresi
      * @param _percentage Miras yüzdesi (1-100)
      * @param _name Varis ismi
@@ -278,7 +381,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
         address _wallet,
         uint256 _percentage,
         string memory _name
-    ) external onlyOwner {
+    ) external onlyOwner whenNotPaused {
         require(_wallet != address(0), "Gecersiz adres");
         require(_percentage > 0 && _percentage < 100, "Yuzde 1-99 arasi olmali");
         require(heirs.length < MAX_HEIRS, "Maksimum varis sayisina ulasildi");
@@ -307,6 +410,36 @@ contract MultiHeirInheritance is ReentrancyGuard {
     }
     
     /**
+     * @notice Ölümden sonra şifreli varisi açığa çıkar (Reveal)
+     * @param _index Varis sırası
+     * @param _wallet Gerçek cüzdan adresi
+     * @param _name Gerçek isim
+     * @param _secretSalt Şifrelemede kullanılan gizli kelime
+     */
+    function revealHeir(
+        uint256 _index,
+        address _wallet,
+        string memory _name,
+        string memory _secretSalt
+    ) external {
+        require(timeLeft() == 0, "Olum onayi yok, reveal yapilamaz");
+        require(_index < heirs.length, "Gecersiz index");
+        
+        Heir storage h = heirs[_index];
+        require(h.wallet == address(0), "Vasiyet zaten aciga cikarildi veya acik kaydedildi");
+        require(h.secretHash != bytes32(0), "Bu acik bir vasiyet");
+        
+        // Hash kontrolü: keccak256(abi.encodePacked(_wallet, _name, _secretSalt))
+        bytes32 computedHash = keccak256(abi.encodePacked(_wallet, _name, _secretSalt));
+        require(computedHash == h.secretHash, "Hatali bilgiler veya yanlis varis");
+        
+        h.wallet = _wallet;
+        h.name = _name;
+        
+        emit HeirUpdated(_index, _wallet, h.percentage);
+    }
+    
+    /**
      * @notice Varis güncelleme başlat (TimeLock ile)
      * @param _index Güncellenecek varis index'i
      * @param _newWallet Yeni cüzdan adresi
@@ -318,7 +451,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
         address _newWallet,
         uint256 _newPercentage,
         string memory _newName
-    ) external onlyOwner {
+    ) external onlyOwner whenNotPaused {
         require(_index < heirs.length, "Gecersiz varis indexi");
         require(_newWallet != address(0), "Gecersiz adres");
         require(_newPercentage > 0 && _newPercentage <= 100, "Yuzde 1-100 arasi olmali");
@@ -331,11 +464,11 @@ contract MultiHeirInheritance is ReentrancyGuard {
             newHeir: _newWallet,
             newPercentage: _newPercentage,
             newName: _newName,
-            unlockTime: block.timestamp + TIMELOCK_DURATION,
+            unlockTime: block.timestamp + timelockDuration,
             exists: true
         });
         
-        emit TimeLockInitiated(_index, block.timestamp + TIMELOCK_DURATION);
+        emit TimeLockInitiated(_index, block.timestamp + timelockDuration);
     }
     
     /**
@@ -375,7 +508,18 @@ contract MultiHeirInheritance is ReentrancyGuard {
         require(_index < heirs.length, "Gecersiz index");
         require(heirs.length > 1, "En az bir varis olmali");
         heirs[_index].isActive = false;
-        emit HeirRemoved(heirs[_index].wallet);
+        
+        // Trusted signer listesinden çıkar
+        address heirWallet = heirs[_index].wallet;
+        for (uint256 i = 0; i < trustedSigners.length; i++) {
+            if (trustedSigners[i] == heirWallet) {
+                trustedSigners[i] = trustedSigners[trustedSigners.length - 1];
+                trustedSigners.pop();
+                break;
+            }
+        }
+        
+        emit HeirRemoved(heirWallet);
     }
     
     // ============================================
@@ -385,7 +529,14 @@ contract MultiHeirInheritance is ReentrancyGuard {
     /**
      * @notice Miras talep et - tüm aktif varislere yüzdelik dağıtım yapar
      */
-    function claimInheritance() external nonReentrant {
+    /**
+     * @notice Miras dağıtımını hesapla — Pull-over-Push pattern
+     * @dev DoS saldırısını önlemek için ETH doğrudan gönderilmez,
+     *      her varisin payı pendingWithdrawals'a yazılır.
+     *      Varisler kendi paylarını withdrawShare() ile çeker.
+     */
+    function claimInheritance() external nonReentrant whenNotPaused {
+        require(!inheritanceClaimed, "Miras zaten dagitildi");
         require(timeLeft() == 0, "Sure dolmadi veya Oracle onayi yok");
         
         // Grace Period Kontrolü
@@ -395,12 +546,15 @@ contract MultiHeirInheritance is ReentrancyGuard {
         uint256 balance = address(this).balance;
         require(balance > 0, "Bakiye yok");
         
-        // Aktif varisleri ve toplam yüzdeyi hesapla (Reveal kontrolü burada yapılabilir)
+        inheritanceClaimed = true;
+        
+        // Aktif varisleri ve toplam yüzdeyi hesapla
         uint256 activePercentage = 0;
         uint256 activeCount = 0;
         
         for (uint256 i = 0; i < heirs.length; i++) {
             if (heirs[i].isActive) {
+                require(heirs[i].wallet != address(0), "Once tum gizli vasiyetler aciga cikarilmali (Reveal)");
                 activePercentage += heirs[i].percentage;
                 activeCount++;
             }
@@ -408,52 +562,285 @@ contract MultiHeirInheritance is ReentrancyGuard {
         
         require(activeCount > 0, "Aktif varis yok");
         
-        // Transfer dizileri
+        // Pull-over-Push: Her varisin payını hesapla ve pendingWithdrawals'a yaz
         address[] memory recipients = new address[](activeCount);
         uint256[] memory amounts = new uint256[](activeCount);
         uint256 currentIndex = 0;
-        uint256 totalTransferred = 0;
+        uint256 totalAllocated = 0;
         
-        // Her varise payını transfer et
         for (uint256 i = 0; i < heirs.length; i++) {
             if (heirs[i].isActive) {
                 uint256 normalizedPercentage = (heirs[i].percentage * 100) / activePercentage;
                 uint256 amount = (balance * normalizedPercentage) / 100;
                 
                 if (currentIndex == activeCount - 1) {
-                    amount = balance - totalTransferred;
+                    amount = balance - totalAllocated;
                 }
                 
+                pendingWithdrawals[heirs[i].wallet] += amount;
                 recipients[currentIndex] = heirs[i].wallet;
                 amounts[currentIndex] = amount;
                 
-                (bool success, ) = payable(heirs[i].wallet).call{value: amount}("");
-                require(success, "Transfer failed");
-                totalTransferred += amount;
+                emit ShareAllocated(heirs[i].wallet, amount);
+                totalAllocated += amount;
                 currentIndex++;
             }
         }
-        
         emit AssetsTransferred(recipients, amounts, balance);
     }
     
     /**
-     * @notice ERC20 Token mirasını dağıt
+     * @notice Varis kendi ETH payını çeker (Pull-over-Push)
+     * @dev DoS saldırısına karşı güvenli: Her varis sadece kendi payını çeker
      */
-    function claimTokens(address _tokenAddress) external nonReentrant {
+    function withdrawShare() external nonReentrant {
+        uint256 amount = pendingWithdrawals[msg.sender];
+        require(amount > 0, "Cekilecek pay yok");
+        
+        pendingWithdrawals[msg.sender] = 0;
+        
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "Transfer failed");
+        
+        emit ShareWithdrawn(msg.sender, amount);
+    }
+    
+    // ============================================
+    // SPECIFIC ASSET ALLOCATION (NFT & TOKEN)
+    // ============================================
+    
+    /**
+     * @notice Spesifik bir ERC20 Token miktarını bir varise ata
+     */
+    function assignSpecificToken(address _tokenAddress, uint256 _amount, address _heir) external onlyOwner whenNotPaused {
+        require(_tokenAddress != address(0), "Gecersiz adres");
+        require(_amount > 0, "Miktar 0 olamaz");
+        require(_heir != address(0), "Gecersiz varis");
+        
+        specificWills.push(SpecificAsset({
+            assetAddress: _tokenAddress,
+            tokenId: 0,
+            amount: _amount,
+            designatedHeir: _heir,
+            isERC721: false,
+            isClaimed: false
+        }));
+        
+        emit SpecificAssetAssigned(specificWills.length - 1, _tokenAddress, _heir);
+    }
+    
+    /**
+     * @notice Spesifik bir NFT'yi (ERC721) bir varise ata
+     */
+    function assignSpecificNFT(address _nftAddress, uint256 _tokenId, address _heir) external onlyOwner whenNotPaused {
+        require(_nftAddress != address(0), "Gecersiz adres");
+        require(_heir != address(0), "Gecersiz varis");
+        
+        specificWills.push(SpecificAsset({
+            assetAddress: _nftAddress,
+            tokenId: _tokenId,
+            amount: 1,
+            designatedHeir: _heir,
+            isERC721: true,
+            isClaimed: false
+        }));
+        
+        emit SpecificAssetAssigned(specificWills.length - 1, _nftAddress, _heir);
+    }
+    
+    /**
+     * @notice Spesifik atamayı iptal et
+     */
+    function removeSpecificAsset(uint256 _index) external onlyOwner {
+        require(_index < specificWills.length, "Gecersiz index");
+        require(!specificWills[_index].isClaimed, "Zaten talep edildi");
+        
+        // Sadece sıfırlama (diziden silmiyoruz indexler kaymasin diye)
+        specificWills[_index].amount = 0;
+        specificWills[_index].designatedHeir = address(0);
+        
+        emit SpecificAssetRemoved(_index);
+    }
+    
+    /**
+     * @notice Atanmis spesifik varligi (NFT/Token) talep et
+     * @dev Token/NFT sahibinin bu kontrata 'Approve' vermis olmasi gerekir
+     */
+    function claimSpecificAsset(uint256 _index) external nonReentrant {
+        require(timeLeft() == 0, "Sure dolmadi veya Oracle onayi yok");
+        require(deathConfirmedTime > 0, "Grace Period baslatilmadi");
+        require(block.timestamp >= deathConfirmedTime + GRACE_PERIOD, "Grace Period dolmadi");
+        
+        require(_index < specificWills.length, "Gecersiz index");
+        SpecificAsset storage willRecord = specificWills[_index];
+        require(!willRecord.isClaimed, "Zaten talep edildi");
+        require(willRecord.designatedHeir != address(0), "Atanmis varis yok veya iptal edildi");
+        
+        willRecord.isClaimed = true;
+        
+        if (willRecord.isERC721) {
+            // NFT Transfer
+            IERC721(willRecord.assetAddress).transferFrom(owner, willRecord.designatedHeir, willRecord.tokenId);
+        } else {
+            // ERC20 Token Transfer
+            IERC20(willRecord.assetAddress).transferFrom(owner, willRecord.designatedHeir, willRecord.amount);
+        }
+        
+        emit SpecificAssetClaimed(_index, willRecord.designatedHeir);
+    }
+    
+    function getSpecificWillsCount() external view returns (uint256) {
+        return specificWills.length;
+    }
+    
+    /**
+     * @notice ERC20 Token mirasını dağıt (normalize edilmiş yüzdelerle)
+     */
+    /**
+     * @notice ERC20 Token mirasını hesapla — Pull-over-Push pattern
+     * @dev Tokenlar pendingTokenWithdrawals'a yazılır, varisler withdrawTokenShare() ile çeker
+     */
+    function claimTokens(address _tokenAddress) external nonReentrant whenNotPaused {
+        require(!tokenClaimed[_tokenAddress], "Token zaten dagitildi");
         require(timeLeft() == 0, "Sure dolmadi");
+        require(deathConfirmedTime > 0, "Grace Period baslatilmadi");
         require(block.timestamp >= deathConfirmedTime + GRACE_PERIOD, "Grace Period aktif");
         
         uint256 balance = IERC20(_tokenAddress).balanceOf(address(this));
         require(balance > 0, "Token bakiyesi yok");
         
-        // (Similar distribution logic for tokens...)
+        tokenClaimed[_tokenAddress] = true;
+        
+        uint256 activePercentage = 0;
+        uint256 activeCount = 0;
         for (uint256 i = 0; i < heirs.length; i++) {
             if (heirs[i].isActive) {
-                uint256 amount = (balance * heirs[i].percentage) / 100;
-                IERC20(_tokenAddress).transfer(heirs[i].wallet, amount);
+                require(heirs[i].wallet != address(0), "Once tum gizli vasiyetler aciga cikarilmali (Reveal)");
+                activePercentage += heirs[i].percentage;
+                activeCount++;
             }
         }
+        require(activeCount > 0, "Aktif varis yok");
+        
+        uint256 totalAllocated = 0;
+        uint256 currentIndex = 0;
+        for (uint256 i = 0; i < heirs.length; i++) {
+            if (heirs[i].isActive) {
+                currentIndex++;
+                uint256 normalizedPercentage = (heirs[i].percentage * 100) / activePercentage;
+                uint256 amount = (balance * normalizedPercentage) / 100;
+                
+                if (currentIndex == activeCount) {
+                    amount = balance - totalAllocated;
+                }
+                
+                pendingTokenWithdrawals[_tokenAddress][heirs[i].wallet] += amount;
+                emit TokenShareAllocated(_tokenAddress, heirs[i].wallet, amount);
+                totalAllocated += amount;
+            }
+        }
+    }
+    
+    /**
+     * @notice Varis kendi token payını çeker (Pull-over-Push)
+     * @param _tokenAddress Çekilecek token adresi
+     */
+    function withdrawTokenShare(address _tokenAddress) external nonReentrant {
+        uint256 amount = pendingTokenWithdrawals[_tokenAddress][msg.sender];
+        require(amount > 0, "Cekilecek token payi yok");
+        
+        pendingTokenWithdrawals[_tokenAddress][msg.sender] = 0;
+        
+        IERC20(_tokenAddress).transfer(msg.sender, amount);
+        
+        emit TokenShareWithdrawn(_tokenAddress, msg.sender, amount);
+    }
+    
+    // ============================================
+    // CONFIGURATION FUNCTIONS
+    // ============================================
+    
+    /**
+     * @notice TimeLock süresini güncelle (sadece sahip)
+     * @param _newDuration Yeni süre (saniye cinsinden)
+     */
+    function setTimelockDuration(uint256 _newDuration) external onlyOwner {
+        require(_newDuration >= 60, "Minimum 60 saniye olmali");
+        timelockDuration = _newDuration;
+    }
+    
+    /**
+     * @notice Approve tabanlı token mirası — kullanıcı tokenlarını kendi cüzdanında tutar,
+     *         kontrata sadece harcama izni (approve) verir. Ölüm onaylandığında
+     *         kontrat kullanıcının cüzdanından direkt varislere transfer yapar.
+     * @param _tokenAddress ERC20 token kontrat adresi
+     */
+    function claimApprovedTokens(address _tokenAddress) external nonReentrant whenNotPaused {
+        require(!tokenClaimed[_tokenAddress], "Token zaten dagitildi");
+        require(timeLeft() == 0, "Sure dolmadi");
+        require(deathConfirmedTime > 0, "Grace Period baslatilmadi");
+        require(block.timestamp >= deathConfirmedTime + GRACE_PERIOD, "Grace Period aktif");
+        
+        // Sahibin cüzdanındaki onaylanmış bakiyeyi kontrol et
+        uint256 allowance = IERC20(_tokenAddress).allowance(owner, address(this));
+        uint256 ownerBalance = IERC20(_tokenAddress).balanceOf(owner);
+        uint256 available = allowance < ownerBalance ? allowance : ownerBalance;
+        require(available > 0, "Onaylanmis token bakiyesi yok");
+
+        tokenClaimed[_tokenAddress] = true;
+        require(
+            IERC20(_tokenAddress).transferFrom(owner, address(this), available),
+            "Token transferi basarisiz"
+        );
+        
+        // Aktif varislerin toplam yüzdesini hesapla
+        uint256 activePercentage = 0;
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < heirs.length; i++) {
+            if (heirs[i].isActive) {
+                require(heirs[i].wallet != address(0), "Once tum gizli vasiyetler aciga cikarilmali (Reveal)");
+                activePercentage += heirs[i].percentage;
+                activeCount++;
+            }
+        }
+        require(activeCount > 0, "Aktif varis yok");
+        
+        uint256 totalAllocated = 0;
+        uint256 currentIndex = 0;
+        for (uint256 i = 0; i < heirs.length; i++) {
+            if (heirs[i].isActive) {
+                currentIndex++;
+                uint256 normalizedPercentage = (heirs[i].percentage * 100) / activePercentage;
+                uint256 amount = (available * normalizedPercentage) / 100;
+                
+                if (currentIndex == activeCount) {
+                    amount = available - totalAllocated;
+                }
+                
+                pendingTokenWithdrawals[_tokenAddress][heirs[i].wallet] += amount;
+                emit TokenShareAllocated(_tokenAddress, heirs[i].wallet, amount);
+                totalAllocated += amount;
+            }
+        }
+    }
+    
+    /**
+     * @notice Kontratı duraklat — tüm kritik işlemleri engeller
+     * @dev Sadece sahip çağırabilir. Kritik bir güvenlik açığı bulunduğunda kullanılır.
+     */
+    function pause() external onlyOwner {
+        require(!paused, "Zaten duraklatildi");
+        paused = true;
+        emit ContractPaused(msg.sender, block.timestamp);
+    }
+    
+    /**
+     * @notice Kontratı devam ettir — duraklatmayı kaldır
+     */
+    function unpause() external onlyOwner {
+        require(paused, "Kontrat zaten aktif");
+        paused = false;
+        emit ContractUnpaused(msg.sender, block.timestamp);
     }
     
     // ============================================
@@ -489,7 +876,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
      * @param _to Hedef adres
      * @param _amount Transfer miktarı
      */
-    function emergencyMultiSigTransfer(address _to, uint256 _amount) external nonReentrant {
+    function emergencyMultiSigTransfer(address _to, uint256 _amount) external onlyTrustedSigner nonReentrant {
         bytes32 actionHash = keccak256(abi.encodePacked(_to, _amount, block.number / 100));
         require(emergencyApprovals[actionHash] >= REQUIRED_SIGNATURES, "Yetersiz onay");
         require(address(this).balance >= _amount, "Yetersiz bakiye");

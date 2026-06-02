@@ -26,6 +26,9 @@ describe("LegacyChain Advanced Protocol Verification", function () {
             inheritance = await MultiHeirInheritance.deploy(heir.address, await oracle.getAddress(), TIME_LIMIT);
             await inheritance.waitForDeployment();
 
+            // 3.5 Oracle'a inheritance kontrat adresini kaydet
+            await oracle.setInheritanceContract(await inheritance.getAddress());
+
             // 4. Deploy Mock Token
             const MockERC20 = await ethers.getContractFactory("contracts/MockERC20.sol:MockERC20");
             token = await MockERC20.deploy();
@@ -130,10 +133,61 @@ describe("LegacyChain Advanced Protocol Verification", function () {
             await ethers.provider.send("evm_mine");
 
             const beforeBal = await token.balanceOf(heir.address);
-            await inheritance.connect(heir).claimTokens(await token.getAddress());
+            const tokenAddr = await token.getAddress();
+            await inheritance.connect(heir).claimTokens(tokenAddr);
+            await inheritance.connect(heir).withdrawTokenShare(tokenAddr);
             const afterBal = await token.balanceOf(heir.address);
 
             expect(afterBal - beforeBal).to.equal(ethers.parseUnits("1000", 18));
+        });
+
+        it("Should allocate approved ERC20 tokens for pull withdrawals", async function () {
+            await inheritance.addHeir(attacker.address, 40, "Second Heir");
+
+            await oracle.connect(auth1).submitDeathSignal(owner.address);
+            await oracle.connect(auth2).submitDeathSignal(owner.address);
+            await inheritance.connect(heir).startGracePeriod();
+
+            await ethers.provider.send("evm_increaseTime", [GRACE_PERIOD + 3600]);
+            await ethers.provider.send("evm_mine");
+
+            const tokenAddr = await token.getAddress();
+            const approvedAmount = ethers.parseUnits("600", 18);
+            await token.approve(await inheritance.getAddress(), approvedAmount);
+
+            await inheritance.connect(attacker).claimApprovedTokens(tokenAddr);
+
+            expect(await inheritance.pendingTokenWithdrawals(tokenAddr, heir.address))
+                .to.equal(ethers.parseUnits("360", 18));
+            expect(await inheritance.pendingTokenWithdrawals(tokenAddr, attacker.address))
+                .to.equal(ethers.parseUnits("240", 18));
+
+            const heirBefore = await token.balanceOf(heir.address);
+            const secondBefore = await token.balanceOf(attacker.address);
+
+            await inheritance.connect(heir).withdrawTokenShare(tokenAddr);
+            await inheritance.connect(attacker).withdrawTokenShare(tokenAddr);
+
+            expect(await token.balanceOf(heir.address))
+                .to.equal(heirBefore + ethers.parseUnits("360", 18));
+            expect(await token.balanceOf(attacker.address))
+                .to.equal(secondBefore + ethers.parseUnits("240", 18));
+        });
+
+        it("Should not allow approved ERC20 distribution twice", async function () {
+            await oracle.connect(auth1).submitDeathSignal(owner.address);
+            await oracle.connect(auth2).submitDeathSignal(owner.address);
+            await inheritance.connect(heir).startGracePeriod();
+
+            await ethers.provider.send("evm_increaseTime", [GRACE_PERIOD + 3600]);
+            await ethers.provider.send("evm_mine");
+
+            const tokenAddr = await token.getAddress();
+            await token.approve(await inheritance.getAddress(), ethers.parseUnits("100", 18));
+
+            await inheritance.claimApprovedTokens(tokenAddr);
+            await expect(inheritance.claimApprovedTokens(tokenAddr))
+                .to.be.revertedWith("Token zaten dagitildi");
         });
     });
 });

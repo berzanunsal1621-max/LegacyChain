@@ -1,5 +1,6 @@
 # Node modules
 /node_modules
+**/node_modules/
 
 # Compilation output
 /dist
@@ -19,6 +20,8 @@
 # Hardhat coverage reports
 /coverage
 .env
+*.env
+!.env.example
 
 # Large image assets (served locally)
 *.png

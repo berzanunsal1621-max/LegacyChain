@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -234,6 +234,11 @@
         const { useState, useEffect, useRef } = React;
 
         // --- BLOCKCHAIN CONSTANTS ---
+        const ORACLE_BACKEND_URL = "http://localhost:3001";
+        const BACKEND_API_KEY_STORAGE_KEY = "legacychainBackendApiKey";
+        const VAULT_FACTORY_STORAGE_KEY = "legacychainFactoryAddress";
+        const ACTIVE_VAULT_STORAGE_KEY = "legacychainActiveVaultAddress";
+
         // Paste the contract address you deployed from Remix here:
         const CONTRACT_ADDRESS = "0x623fFe87899343A79790E17A4FBD7F4804897686";
 
@@ -249,10 +254,10 @@
         // Basic Contract ABI
         const CONTRACT_ABI = [
             "function ping() external",
-            "function simulateOracleSignal() external",
             "function claimInheritance() external",
             "function emergencyWithdraw() external",
             "function timeLeft() external view returns (uint256)",
+            "function timeLimit() external view returns (uint256)",
             "function currentBalance() public view returns (uint256)",
             "function owner() public view returns (address)",
             "function heir() public view returns (address)",
@@ -266,19 +271,37 @@
         const MULTI_HEIR_ABI = [
             "function ping() external",
             "function recordActivity() external",
-            "function simulateOracleSignal() external",
             "function claimInheritance() external",
+            "function startGracePeriod() external",
             "function claimTokens(address _tokenAddress) external",
+            "function claimApprovedTokens(address _tokenAddress) external",
+            "function withdrawShare() external",
+            "function withdrawTokenShare(address _tokenAddress) external",
             "function emergencyWithdraw() external",
             "function timeLeft() external view returns (uint256)",
+            "function timeLimit() external view returns (uint256)",
             "function currentBalance() public view returns (uint256)",
             "function owner() public view returns (address)",
             "function getHeirCount() external view returns (uint256)",
             "function getHeir(uint256 _index) external view returns (address wallet, uint256 percentage, string memory name, bool isActive)",
-            "function getAllHeirs() external view returns (tuple(address wallet, uint256 percentage, string name, bool isActive)[])",
+            "function getAllHeirs() external view returns (tuple(address wallet, uint256 percentage, string name, bool isActive, bytes32 secretHash)[])",
             "function decentralizedOracle() external view returns (address)",
             "function deathConfirmedTime() external view returns (uint256)",
             "function GRACE_PERIOD() external view returns (uint256)",
+            "function pendingWithdrawals(address) external view returns (uint256)",
+            "function pendingTokenWithdrawals(address,address) external view returns (uint256)",
+            "function specificWills(uint256) external view returns (address assetAddress, uint256 tokenId, uint256 amount, address designatedHeir, bool isERC721, bool isClaimed)",
+            "function getSpecificWillsCount() external view returns (uint256)",
+            "function assignSpecificToken(address _tokenAddress, uint256 _amount, address _heir) external",
+            "function assignSpecificNFT(address _nftAddress, uint256 _tokenId, address _heir) external",
+            "function removeSpecificAsset(uint256 _index) external",
+            "function claimSpecificAsset(uint256 _index) external",
+            "function addHeirHash(bytes32 _secretHash, uint256 _percentage) external",
+            "function revealHeir(uint256 _index, address _wallet, string memory _name, string memory _secretSalt) external",
+            "function initiateHeirUpdate(uint256 _index, address _newWallet, uint256 _newPercentage, string memory _newName) external",
+            "function executeHeirUpdate(uint256 _index) external",
+            "function cancelHeirUpdate(uint256 _index) external",
+            "function getPendingChange(uint256 _index) external view returns (address newHeir, uint256 newPercentage, string memory newName, uint256 unlockTime, bool exists)",
             "event Pulse(uint256 timestamp)",
             "event OracleSignalReceived(string message, uint256 timestamp)",
             "event AssetsTransferred(address[] recipients, uint256[] amounts, uint256 totalAmount)"
@@ -287,10 +310,16 @@
         // Decentralized Oracle ABI
         const ORACLE_ABI = [
             "function submitDeathSignal(address _user) external",
+            "function submitDeathSignal(address _user, bytes32 _metadataHash, bytes32 _sourceType) external",
             "function isDeathConfirmed(address _user) external view returns (bool)",
             "function signalCount(address _user) external view returns (uint256)",
+            "function getCurrentCaseId(address _user) external view returns (bytes32)",
+            "function getCaseStatus(address _user) external view returns (uint8)",
+            "function getCase(bytes32 _caseId) external view returns (tuple(bytes32 caseId, address user, address vault, uint8 status, bytes32 reason, uint64 openedAt, uint64 attestedAt, uint64 resolvedAt, uint8 categoryCount, bool ownerResponded))",
             "function authorities(uint256 index) external view returns (address)",
             "function getAuthorities() external view returns (address[] memory)",
+            "function getAttestationCount(address _user) external view returns (uint256)",
+            "function getAttestation(address _user, uint256 _index) external view returns (address authority, bytes32 metadataHash, bytes32 sourceType, uint256 timestamp)",
             "function deathSignals(address user, address authority) external view returns (bool)",
             "event DeathSignalSubmitted(address indexed user, address indexed authority)",
             "event DeathConfirmed(address indexed user, uint256 timestamp)"
@@ -298,12 +327,142 @@
 
         // Get the active contract config
         const getActiveContract = () => ({
-            address: USE_ADVANCED_CONTRACT ? MULTI_HEIR_CONTRACT_ADDRESS : CONTRACT_ADDRESS,
+            address: localStorage.getItem(ACTIVE_VAULT_STORAGE_KEY) || (USE_ADVANCED_CONTRACT ? MULTI_HEIR_CONTRACT_ADDRESS : CONTRACT_ADDRESS),
             abi: USE_ADVANCED_CONTRACT ? MULTI_HEIR_ABI : CONTRACT_ABI,
             isAdvanced: USE_ADVANCED_CONTRACT
         });
 
-        // --- TRANSLATIONS / ÇEVİRİLER ---
+        const VAULT_FACTORY_ABI = [
+            "function createVault(address _initialHeir, uint256 _timeLimitSeconds) external returns (address)",
+            "function getVaults(address _user) external view returns (address[] memory)"
+        ];
+
+        const backendHeaders = () => {
+            const apiKey = localStorage.getItem(BACKEND_API_KEY_STORAGE_KEY);
+            return {
+                "Content-Type": "application/json",
+                ...(apiKey ? { "X-API-Key": apiKey } : {})
+            };
+        };
+
+        const TRANSLATIONS_TR_OVERRIDE = {
+            nav: { wallet: "Cuzdan Bagla", features: "Ozellikler", build: "Insa Et", support: "Destek", about: "Hakkinda", demo: "Paneli Ac", lang: "Dil", dashboard: "Panel", logout: "Cikis Yap", system_online: "Sistem Cevrimici", protocol_active: "Protokol Aktif" },
+            hero: {
+                badge: "YENI NESIL WEB3 MIRAS PROTOKOLU",
+                title1: "Varliklariniz.",
+                title2: "Guvenli.",
+                title3: "Planli Miras.",
+                desc: "LegacyChain, kullanicinin kendi kasasini olusturdugu, varislerini tanimladigi ve proof-of-life akisiyla miras planini yonettigi zincir ustu bir sistemdir.",
+                start: "Kasa Olustur",
+                users: "Vault Kullanici",
+                audited: "Test Edildi",
+                status: "Ag Durumu",
+                people: "Aktif Demo",
+                online: "Canli",
+                view_demo: "Paneli Ac"
+            },
+            dashboard: {
+                protocol: "Protokol Aktif",
+                system: "Guvenlik Kontrolleri Hazir",
+                title: "Panel",
+                timer_title: "Hayat Kaniti Sayaci", timer_desc: "Miras akisini tetikleyen sure. Ping gondererek sayaci sifirlayabilirsiniz.",
+                timer_expired: "Claim sureci acildi. Varisler cekim yapabilir.",
+                timer_only_expired: "Sure doldu. Claim akisina gecilebilir.",
+                funds_transferred: "Miras Dagitimi Baslatildi",
+                ping_btn: "Hayattayim (Ping)", ping_desc: "Sayaci sifirla",
+                deposit: "Yatir", deposit_desc: "ETH ekle",
+                withdraw: "Cek", withdraw_desc: "Acil durum cekimi",
+                oracle_test: "Oracle Sinyali", oracle_desc: "Yetkili backend uzerinden sinyal gonder",
+                oracles_title: "Attestation Registry", oracles_desc: "Onayli otoriteler proof-of-life durumunu kaydeder.",
+                recent_activity: "Son Aktiviteler", view_all: "Tumunu Gor",
+                total_value: "Kilitli Toplam Deger",
+                beneficiary_title: "BIRINCIL VARIS", authorized: "Yetkili", edit_ben: "Varisi Guncelle",
+                heirs_title: "Varisler ve Dagitim", add_heir: "Varis Ekle",
+                system_health: "SISTEM DURUMU", operational: "Operasyonel", smart_contract: "Akilli kontrat aktif", last_block: "Son Blok",
+                ai_prediction: "PROOF-OF-LIFE RISK", neural_analysis: "Deterministik Risk Motoru",
+                multi_heir_title: "Coklu Varis Dagilimi", mng_heirs: "Varisleri Yonet", hide_details: "Detaylari Gizle",
+                chainlink_feed: "ETH/USD Piyasa Fiyati", oracle_log: "Oracle Aktivite Gunlugu", all_systems_ok: "Tum sistemler normal",
+                live_oracle: "Piyasa verisi ve yerel fallback",
+                quick_actions: "Hizli Islemler",
+                oracle_consensus: "Oracle Konsensusu",
+                grace_period_active: "Guvenlik Beklemesi Aktif",
+                grace_period_desc: "Guvenlik suresi devrede. Sahip aktifse surec iptal edilebilir.",
+                cancel_btn: "Miras Islemini Iptal Et",
+                authorities_confirmed: "Kurum Onaylari",
+                ghost_ping: "Sahip Aktivite Takibi"
+            },
+            why: {
+                title: "Neden LegacyChain?",
+                subtitle: "Guvenlik, otonomi ve uygulanabilir miras akisi.",
+                card1_title: "Durdurulamaz Protokol",
+                card1_desc: "Akilli kontratlar, platform devre disi kalsa bile kurallarin calismaya devam etmesini saglar.",
+                card2_title: "Kontrol Kullanicide",
+                card2_desc: "Belirlenen kosullar saglanana kadar kasa ve varliklarin kontrolu sahibinde kalir.",
+                card3_title: "Coklu Otorite Dogrulamasi",
+                card3_desc: "Olum veya ulasilamama iddiasi tek kaynaga dayanmaz; yetkili attestation modeliyle kayda gecilir."
+            },
+            protocol: {
+                title: "Miras Protokolu Isleyisi",
+                step1_title: "01. Kasa Olustur",
+                step1_desc: "Kullanici factory uzerinden kendi vault'unu olusturur.",
+                step2_title: "02. Kosullari Belirle",
+                step2_desc: "Sure, varisler, varliklar ve oracle politikasi zincir ustunde tanimlanir.",
+                step3_title: "03. Claim Akisi",
+                step3_desc: "Proof-of-life basarisiz olur ve grace period tamamlanirsa varisler paylarini ceker."
+            },
+            innovation: {
+                title: "Teknik Yapi",
+                smart_contract_title: "Zincir Ustu Yonetim",
+                smart_contract_desc: "Vault, varis dagitimi, timelock ve pull-payment akislarini akilli kontrat uzerinde yonetir.",
+                oracle_title: "Attestation Katmani",
+                oracle_desc: "Yetkili roller metadata hash ile sinyal gonderir; durum zincir ustunde izlenir.",
+                privacy_title: "Gizlilik Yaklasimi",
+                privacy_desc: "Gerekli olmayan hassas veri zincire yazilmaz; commit-reveal ve metadata hash yaklasimi kullanilir."
+            },
+            modal: {
+                meta_missing: "MetaMask Eksik", meta_desc: "Lutfen MetaMask eklentisini tarayiciniza yukleyin.",
+                processing: "Isleniyor", success: "Basarili", error: "Hata",
+                ping_sent: "Ping islemi blokzincirine gonderiliyor...", ping_confirmed: "Ping onaylandi. Sayac sifirlandi.",
+                deposit_title: "ETH Yatir", deposit_content: "Kontrata yatirmak istediginiz ETH miktarini girin:", deposit_send: "Yatirimi Gonder", deposit_success: "Yatirim Basarili",
+                deposit_failed: "Yatirma islemi basarisiz",
+                withdraw_progress: "Acil durum cekimi yapiliyor...", withdraw_complete: "Acil durum cekimi tamamlandi.", no_balance: "Bakiye Yok", access_denied: "Erisim Reddedildi", withdraw_failed: "Cekim basarisiz",
+                oracle_progress: "Oracle sinyali gonderiliyor...", oracle_triggered: "ORACLE SINYALI GONDERILDI", oracle_confirmed: "Oracle sinyali kaydedildi.",
+                ben_title: "Varisi Degistir", ben_content: "Yeni Ethereum adresini girin (0x...):", ben_success: "Varis degisikligi siraya alindi.", invalid_addr: "Gecersiz adres.",
+                change_lang: "Dil Turkce olarak degistirildi"
+            },
+            roadmap: {
+                title: "Yol Haritasi", subtitle: "Gelisimin ana adimlari",
+                phase1_title: "Cekirdek", phase1_item1: "Vault ve oracle omurgasi", phase1_item2: "Temel testler",
+                phase2_title: "Urun", phase2_item1: "Gercek UI akislarinin baglanmasi", phase2_item2: "Bildirim sistemi",
+                phase3_title: "Guvenlik", phase3_item1: "Ek testler", phase3_item2: "Backend sertlestirme",
+                phase4_title: "Yayin", phase4_item1: "Demo ortami", phase4_item2: "Dokumantasyon ve rapor"
+            },
+            architecture: {
+                title: "Protokol Mimarisi",
+                subtitle: "Gercek sistem akisina gore tasarlandi",
+                step1_title: "Tetikleme Olayi", step1_desc: "Yetkili otoriteler metadata hash ile sinyal gonderir.",
+                step2_title: "Zaman Kilidi Asamasi", step2_desc: "Hatali alarm riskine karsi grace period baslar.",
+                step3_title: "Cekme Bazli Dagitim", step3_desc: "Varisler paylarini pull-payment modeliyle kendileri ceker."
+            },
+            security: {
+                title: "Cok Katmanli Guvenlik",
+                subtitle: "Guven gerektirmeyen ve denetlenebilir koruma",
+                card1_title: "Pull-Payment Dagitim", card1_desc: "Bir varisin hatasi diger varislerin odemesini engellemez.",
+                card2_title: "Degismez Mantik", card2_desc: "Yayina alinan miras kurallari akilli kontrat tarafinda korunur.",
+                card3_title: "Donanim ve Cuzdan Uyumu", card3_desc: "Standart EVM cuzdanlari ve soguk cuzdan akislarina uyumlu olacak sekilde tasarlandi."
+            },
+            audit: {
+                title: "Guvenlik ve Itimat",
+                subtitle: "Acik kaynak standartlari ve yerel testlerle dogrulandi",
+                badge1: "Ic Test Paketi", badge2: "OpenZeppelin Standartlari", badge3: "Elle Inceleme",
+                report_title: "Otomatik Test Durumu",
+                report_status: "GECIYOR", report_score: "Kapsam Ozeti",
+                vulnerabilities: "Pull-payment ve claim akislari test edildi",
+                logic_check: "Authority registry ve grace-period akislari test edildi"
+            }
+        };
+
+        // --- TRANSLATIONS / Ã‡EVÄ°RÄ°LER ---
         const TRANSLATIONS = {
             en: {
                 nav: { wallet: "Connect Wallet", features: "Features", build: "Build", support: "Support", about: "About", demo: "View Demo", lang: "Language", dashboard: "Dashboard", logout: "Disconnect", system_online: "System Online", protocol_active: "Protocol Active" },
@@ -315,11 +474,11 @@
                     desc: "Secure your digital future with the world's most advanced crystalline vault protocol. Instant, anonymous, and mathematically certain inheritance.",
                     start: "Deploy Your Vault",
                     users: "Global Users",
-                    audited: "Security Audit",
+                    audited: "Tested Build",
                     status: "Network Status",
                     people: "Investors",
                     online: "Live",
-                    view_demo: "Watch Protocol Demo"
+                    view_demo: "Open Dashboard"
                 },
                 dashboard: {
                     protocol: "Protocol Active",
@@ -332,17 +491,17 @@
                     ping_btn: "I'm Alive (Ping)", ping_desc: "Reset Timer",
                     deposit: "Deposit", deposit_desc: "Add assets",
                     withdraw: "Withdraw", withdraw_desc: "Emergency withdraw",
-                    oracle_test: "Oracle Test", oracle_desc: "Simulate Death Signal",
-                    oracles_title: "Active Life Verifiers (Oracles)", oracles_desc: "Real-time data streams validating Proof of Life.",
+                    oracle_test: "Submit Oracle Signal", oracle_desc: "Use authority backend",
+                    oracles_title: "Attestation Registry", oracles_desc: "Approved authorities validate proof-of-life state.",
                     recent_activity: "Recent Activity", view_all: "View All",
                     total_value: "Total Value Locked",
                     beneficiary_title: "BENEFICIARY", authorized: "Authorized", edit_ben: "Edit Beneficiary",
                     heirs_title: "Heirs & Allocation", add_heir: "Add Heir",
                     system_health: "SYSTEM HEALTH", operational: "Operational", smart_contract: "Smart contract is active", last_block: "Last Block",
-                    ai_prediction: "AI HEALTH PREDICTION", neural_analysis: "Neural Network Analysis",
+                    ai_prediction: "PROOF-OF-LIFE RISK", neural_analysis: "Deterministic Risk Engine",
                     multi_heir_title: "Multi-Heir Distribution", mng_heirs: "Manage Heirs", hide_details: "Hide Details",
-                    chainlink_feed: "Chainlink Price Feed", oracle_log: "Oracle Activity Log", all_systems_ok: "All systems OK",
-                    live_oracle: "Live from Chainlink Oracle",
+                    chainlink_feed: "ETH/USD Market Feed", oracle_log: "Oracle Activity Log", all_systems_ok: "All systems OK",
+                    live_oracle: "Market feed with local fallback",
                     quick_actions: "Quick Actions",
                     oracle_consensus: "Oracle Consensus",
                     grace_period_active: "Grace Period Active",
@@ -358,8 +517,8 @@
                     card1_desc: "No manual intervention. Our protocol triggers the inheritance transfer at the speed of the blockchain.",
                     card2_title: "Web3 Autonomy",
                     card2_desc: "Built for the decentralized world. You own your keys, your vault, and your future without intermediaries.",
-                    card3_title: "Decentralized Oracles",
-                    card3_desc: "Real-time life verification via high-speed oracles and high-availability health data points."
+                    card3_title: "Attestation Registry",
+                    card3_desc: "Approved authorities submit timestamped metadata hashes instead of exposing private data."
                 },
                 protocol: {
                     title: "The Inheritance Protocol",
@@ -373,9 +532,9 @@
                 innovation: {
                     title: "Technical Innovation",
                     smart_contract_title: "On-Chain Governance",
-                    smart_contract_desc: "Fully audited Solidity contracts managing asset distribution.",
+                    smart_contract_desc: "Test-covered Solidity contracts managing vault ownership and inheritance distribution.",
                     oracle_title: "Oracle Integration",
-                    oracle_desc: "Interfacing with Chainlink and health APIs for real-time verification.",
+                    oracle_desc: "Authority attestations record source type, metadata hash, and consensus state on-chain.",
                     privacy_title: "ZK-Privacy Concepts",
                     privacy_desc: "Ensuring sensitive data remains private until the release trigger."
                 },
@@ -383,7 +542,7 @@
                     meta_missing: "MetaMask Missing", meta_desc: "Please install MetaMask extension!",
                     processing: "Processing", success: "Success", error: "Error",
                     ping_sent: "Sending Ping transaction to blockchain...", ping_confirmed: "Ping confirmed on blockchain! Timer reset.",
-                    deposit_title: "💰 Deposit ETH", deposit_content: "Enter the amount of ETH you want to deposit into the contract:", deposit_send: "Send Deposit", deposit_success: "Deposit Successful",
+                    deposit_title: "ğŸ’° Deposit ETH", deposit_content: "Enter the amount of ETH you want to deposit into the contract:", deposit_send: "Send Deposit", deposit_success: "Deposit Successful",
                     deposit_failed: "Deposit failed",
                     withdraw_progress: "Emergency withdraw in progress...", withdraw_complete: "Emergency withdrawal completed!", no_balance: "No Balance", access_denied: "Access Denied", withdraw_failed: "Withdraw failed",
                     oracle_progress: "Sending Oracle Signal to blockchain...", oracle_triggered: "ORACLE TRIGGERED", oracle_confirmed: "Oracle signal confirmed! Assets transferred.",
@@ -401,7 +560,7 @@
                 architecture: {
                     title: "The Protocol Architecture",
                     subtitle: "Engineered for Mathematical Certainty",
-                    step1_title: "Trigger Event", step1_desc: "Oracle network detects 'No Pulse' signal from health and social APIs.",
+                    step1_title: "Trigger Event", step1_desc: "Approved authorities submit metadata-hashed attestations to the registry.",
                     step2_title: "Time-Lock Phase", step2_desc: "A grace period starts, allowing the owner to cancel the trigger if it's a false alarm.",
                     step3_title: "Non-Custodial Transfer", step3_desc: "Assets are routed through the smart contract directly to the heirs' wallets."
                 },
@@ -414,131 +573,133 @@
                 },
                 audit: {
                     title: "Security & Trust",
-                    subtitle: "Verified by Industry Standards",
-                    badge1: "CertiK Verified", badge2: "OpenZeppelin Standards", badge3: "Hacken Audited",
-                    report_title: "Security Audit Report Overview",
-                    report_status: "PASSED", report_score: "Security Score: 98/100",
-                    vulnerabilities: "Critical Vulnerabilities: 0",
-                    logic_check: "Smart Contract Logic Integrity: Verified"
+                    subtitle: "Transparent controls backed by open-source standards and local testing",
+                    badge1: "Internal Test Suite", badge2: "OpenZeppelin Standards", badge3: "Manual Review",
+                    report_title: "Automated Test Status",
+                    report_status: "PASSING", report_score: "Coverage Snapshot",
+                    vulnerabilities: "Pull-payment inheritance flow tested",
+                    logic_check: "Authority registry and grace-period flows tested"
                 }
             },
             tr: {
-                nav: { wallet: "Cüzdan Bağla", features: "Özellikler", build: "İnşa Et", support: "Destek", about: "Hakkında", demo: "Demoyu İzle", lang: "Dil", dashboard: "Panel", logout: "Çıkış Yap", system_online: "Sistem Çevrimiçi", protocol_active: "Protokol Aktif" },
+                nav: { wallet: "CÃ¼zdan BaÄŸla", features: "Ã–zellikler", build: "Ä°nÅŸa Et", support: "Destek", about: "HakkÄ±nda", demo: "Demoyu Ä°zle", lang: "Dil", dashboard: "Panel", logout: "Ã‡Ä±kÄ±ÅŸ Yap", system_online: "Sistem Ã‡evrimiÃ§i", protocol_active: "Protokol Aktif" },
                 hero: {
-                    badge: "YENİ NESİL WEB3 MİRAS PROTOKOLÜ",
-                    title1: "Varlıklarınız.",
-                    title2: "Sonsuz ve Güvenli.",
+                    badge: "YENÄ° NESÄ°L WEB3 MÄ°RAS PROTOKOLÃœ",
+                    title1: "VarlÄ±klarÄ±nÄ±z.",
+                    title2: "Sonsuz ve GÃ¼venli.",
                     title3: "Otomatik Miras.",
-                    desc: "Dijital geleceğinizi dünyanın en gelişmiş kristal kasa protokolü ile güvence altına alın. Anında, anonim ve matematiksel kesinlikte miras devri.",
-                    start: "Kasanı Oluştur",
-                    users: "Global Kullanıcı",
-                    audited: "Güvenlik Denetimi",
-                    status: "Ağ Durumu",
-                    people: "Yatırımcı",
+                    desc: "Dijital geleceÄŸinizi dÃ¼nyanÄ±n en geliÅŸmiÅŸ kristal kasa protokolÃ¼ ile gÃ¼vence altÄ±na alÄ±n. AnÄ±nda, anonim ve matematiksel kesinlikte miras devri.",
+                    start: "KasanÄ± OluÅŸtur",
+                    users: "Global KullanÄ±cÄ±",
+                    audited: "GÃ¼venlik Denetimi",
+                    status: "AÄŸ Durumu",
+                    people: "YatÄ±rÄ±mcÄ±",
                     online: "Aktif",
-                    view_demo: "Protokolü İzle"
+                    view_demo: "ProtokolÃ¼ Ä°zle"
                 },
                 dashboard: {
                     protocol: "Protokol Aktif",
-                    system: "Güvenlik Doğrulandı",
+                    system: "GÃ¼venlik DoÄŸrulandÄ±",
                     title: "Panel",
-                    timer_title: "Hayat Kanıtı Sayacı", timer_desc: "Miras protokolü tetiklenene kadar kalan süre. Sayacı sıfırlamak için 'Ping' gönderin.",
-                    timer_expired: "Protokol Yürütüldü. Varlıklar Dağıtıldı.",
-                    timer_only_expired: "Süre Doldu. İşlem Gerekli.",
-                    funds_transferred: "Miras Dağıtıldı",
-                    ping_btn: "Hayattayım (Ping)", ping_desc: "Sayacı Sıfırla",
-                    deposit: "Yatır", deposit_desc: "Varlık ekle",
-                    withdraw: "Çek", withdraw_desc: "Acil durum çekimi",
-                    oracle_test: "Oracle Test", oracle_desc: "Ölüm Sinyali Simüle Et",
-                    oracles_title: "Aktif Hayat Doğrulayıcılar (Oracle'lar)", oracles_desc: "Hayat kanıtını doğrulayan gerçek zamanlı veri akışları.",
-                    recent_activity: "Son Aktiviteler", view_all: "Tümünü Gör",
-                    total_value: "Kilitli Toplam Değer",
-                    beneficiary_title: "VARİS (BENEFICIARY)", authorized: "Yetkili", edit_ben: "Varisi Düzenle",
-                    heirs_title: "Varisler & Dağıtım", add_heir: "Varis Ekle",
-                    system_health: "SİSTEM SAĞLIĞI", operational: "Operasyonel", smart_contract: "Akıllı kontrat aktif", last_block: "Son Blok",
-                    ai_prediction: "YZ SAĞLIK TAHMİNİ", neural_analysis: "Sinir Ağı Analizi",
-                    multi_heir_title: "Çoklu Varis Dağılımı", mng_heirs: "Varisleri Yönet", hide_details: "Detayları Gizle",
-                    chainlink_feed: "Chainlink Fiyat Akışı", oracle_log: "Oracle Aktivite Günlüğü", all_systems_ok: "Tüm sistemler normal",
-                    live_oracle: "Chainlink Oracle'dan Canlı",
-                    quick_actions: "Hızlı İşlemler",
-                    oracle_consensus: "Oracle Konsensüsü",
-                    grace_period_active: "Güvenlik Beklemesi Aktif",
-                    grace_period_desc: "24 saatlik güvenlik süresi devrede. Hayattaysanız işlemi iptal edebilirsiniz.",
-                    cancel_btn: "Miras İşlemini İptal Et",
-                    authorities_confirmed: "Kurum Onayları",
+                    timer_title: "Hayat KanÄ±tÄ± SayacÄ±", timer_desc: "Miras protokolÃ¼ tetiklenene kadar kalan sÃ¼re. SayacÄ± sÄ±fÄ±rlamak iÃ§in 'Ping' gÃ¶nderin.",
+                    timer_expired: "Protokol YÃ¼rÃ¼tÃ¼ldÃ¼. VarlÄ±klar DaÄŸÄ±tÄ±ldÄ±.",
+                    timer_only_expired: "SÃ¼re Doldu. Ä°ÅŸlem Gerekli.",
+                    funds_transferred: "Miras DaÄŸÄ±tÄ±ldÄ±",
+                    ping_btn: "HayattayÄ±m (Ping)", ping_desc: "SayacÄ± SÄ±fÄ±rla",
+                    deposit: "YatÄ±r", deposit_desc: "VarlÄ±k ekle",
+                    withdraw: "Ã‡ek", withdraw_desc: "Acil durum Ã§ekimi",
+                    oracle_test: "Oracle Sinyali", oracle_desc: "Yetkili backend uzerinden sinyal gonder",
+                    oracles_title: "Aktif Hayat DoÄŸrulayÄ±cÄ±lar (Oracle'lar)", oracles_desc: "Hayat kanÄ±tÄ±nÄ± doÄŸrulayan gerÃ§ek zamanlÄ± veri akÄ±ÅŸlarÄ±.",
+                    recent_activity: "Son Aktiviteler", view_all: "TÃ¼mÃ¼nÃ¼ GÃ¶r",
+                    total_value: "Kilitli Toplam DeÄŸer",
+                    beneficiary_title: "VARÄ°S (BENEFICIARY)", authorized: "Yetkili", edit_ben: "Varisi DÃ¼zenle",
+                    heirs_title: "Varisler & DaÄŸÄ±tÄ±m", add_heir: "Varis Ekle",
+                    system_health: "SÄ°STEM SAÄLIÄI", operational: "Operasyonel", smart_contract: "AkÄ±llÄ± kontrat aktif", last_block: "Son Blok",
+                    ai_prediction: "PROOF-OF-LIFE RISK", neural_analysis: "Deterministik Risk Motoru",
+                    multi_heir_title: "Ã‡oklu Varis DaÄŸÄ±lÄ±mÄ±", mng_heirs: "Varisleri YÃ¶net", hide_details: "DetaylarÄ± Gizle",
+                    chainlink_feed: "ETH/USD Piyasa Fiyati", oracle_log: "Oracle Aktivite Gunlugu", all_systems_ok: "Tum sistemler normal",
+                    live_oracle: "Piyasa verisi ve yerel fallback",
+                    quick_actions: "HÄ±zlÄ± Ä°ÅŸlemler",
+                    oracle_consensus: "Oracle KonsensÃ¼sÃ¼",
+                    grace_period_active: "GÃ¼venlik Beklemesi Aktif",
+                    grace_period_desc: "24 saatlik gÃ¼venlik sÃ¼resi devrede. HayattaysanÄ±z iÅŸlemi iptal edebilirsiniz.",
+                    cancel_btn: "Miras Ä°ÅŸlemini Ä°ptal Et",
+                    authorities_confirmed: "Kurum OnaylarÄ±",
                     ghost_ping: "Pasif Aktivite Takibi"
                 },
                 why: {
                     title: "Neden LegacyChain?",
-                    subtitle: "Güvenlik, Otonomi, İç Huzuru.",
+                    subtitle: "GÃ¼venlik, Otonomi, Ä°Ã§ Huzuru.",
                     card1_title: "Durdurulamaz Protokol",
-                    card1_desc: "Akıllı kontratlar, platform çevrimdışı olsa bile isteklerinizin yerine getirilmesini sağlar.",
+                    card1_desc: "AkÄ±llÄ± kontratlar, platform Ã§evrimdÄ±ÅŸÄ± olsa bile isteklerinizin yerine getirilmesini saÄŸlar.",
                     card2_title: "Tam Kontrol Sizde",
-                    card2_desc: "Önceden tanımlanmış kilit açma koşulları karşılanana kadar varlıklarınız üzerinde %100 kontrole sahipsiniz.",
-                    card3_title: "Merkeziyetsiz Doğrulama",
-                    card3_desc: "'Hayat Kanıtı' sistemimiz, gizlilikten ödün vermeden ölümü doğrulamak için merkeziyetsiz oracle'lar kullanır."
+                    card2_desc: "Ã–nceden tanÄ±mlanmÄ±ÅŸ kilit aÃ§ma koÅŸullarÄ± karÅŸÄ±lanana kadar varlÄ±klarÄ±nÄ±z Ã¼zerinde %100 kontrole sahipsiniz.",
+                    card3_title: "Merkeziyetsiz DoÄŸrulama",
+                    card3_desc: "'Hayat KanÄ±tÄ±' sistemimiz, gizlilikten Ã¶dÃ¼n vermeden Ã¶lÃ¼mÃ¼ doÄŸrulamak iÃ§in merkeziyetsiz oracle'lar kullanÄ±r."
                 },
                 protocol: {
-                    title: "Miras Protokolü İşleyişi",
-                    step1_title: "01. Varlıkları Yatırın",
-                    step1_desc: "Varlıklar, gözetimsiz (non-custodial) Akıllı Kasa'da kilitlenir.",
-                    step2_title: "02. Koşulları Belirleyin",
-                    step2_desc: "'Kalp Atışı' aralığınızı tanımlayın ve varislerinizi atayın.",
+                    title: "Miras ProtokolÃ¼ Ä°ÅŸleyiÅŸi",
+                    step1_title: "01. VarlÄ±klarÄ± YatÄ±rÄ±n",
+                    step1_desc: "VarlÄ±klar, gÃ¶zetimsiz (non-custodial) AkÄ±llÄ± Kasa'da kilitlenir.",
+                    step2_title: "02. KoÅŸullarÄ± Belirleyin",
+                    step2_desc: "'Kalp AtÄ±ÅŸÄ±' aralÄ±ÄŸÄ±nÄ±zÄ± tanÄ±mlayÄ±n ve varislerinizi atayÄ±n.",
                     step3_title: "03. Otomatik Transfer",
-                    step3_desc: "Hayat kanıtı başarısız olursa, akıllı kontratlar transferi otomatik gerçekleştirir."
+                    step3_desc: "Hayat kanÄ±tÄ± baÅŸarÄ±sÄ±z olursa, akÄ±llÄ± kontratlar transferi otomatik gerÃ§ekleÅŸtirir."
                 },
                 innovation: {
-                    title: "Teknik İnovasyon",
-                    smart_contract_title: "Zincir Üstü Yönetim",
-                    smart_contract_desc: "Varlık dağıtımını yöneten tam denetimli Solidity kontratları.",
+                    title: "Teknik Ä°novasyon",
+                    smart_contract_title: "Zincir ÃœstÃ¼ YÃ¶netim",
+                    smart_contract_desc: "VarlÄ±k daÄŸÄ±tÄ±mÄ±nÄ± yÃ¶neten tam denetimli Solidity kontratlarÄ±.",
                     oracle_title: "Oracle Entegrasyonu",
-                    oracle_desc: "Gerçek zamanlı doğrulama için Chainlink ve sağlık API'ları ile etkileşim.",
+                    oracle_desc: "Yetkili roller metadata hash ile sinyal gonderir; durum zincir ustunde izlenir.",
                     privacy_title: "Gizlilik Konseptleri",
-                    privacy_desc: "Hassas verilerin tetikleme gerçekleşene kadar gizli kalmasını sağlama."
+                    privacy_desc: "Hassas verilerin tetikleme gerÃ§ekleÅŸene kadar gizli kalmasÄ±nÄ± saÄŸlama."
                 },
                 modal: {
-                    meta_missing: "MetaMask Eksik", meta_desc: "Lütfen tarayıcınıza MetaMask eklentisini yükleyin!",
-                    processing: "İşleniyor", success: "Başarılı", error: "Hata",
-                    ping_sent: "Ping işlemi blokzincirine gönderiliyor...", ping_confirmed: "Ping onaylandı! Sayaç sıfırlandı.",
-                    deposit_title: "💰 ETH Yatır", deposit_content: "Kontrata yatırmak istediğiniz ETH miktarını girin:", deposit_send: "Yatırımı Gönder", deposit_success: "Yatırım Başarılı",
-                    deposit_failed: "Yatırma işlemi başarısız",
-                    withdraw_progress: "Acil durum çekimi yapılıyor...", withdraw_complete: "Acil durum çekimi tamamlandı!", no_balance: "Bakiye Yok", access_denied: "Erişim Reddedildi", withdraw_failed: "Çekim başarısız",
-                    oracle_progress: "Oracle Sinyali gönderiliyor...", oracle_triggered: "ORACLE TETİKLENDİ", oracle_confirmed: "Oracle sinyali onaylandı! Varlıklar transfer edildi.",
-                    ben_title: "Varisi Değiştir", ben_content: "Yeni Ethereum adresini girin (0x...):", ben_success: "Varis adresi güncellendi!", invalid_addr: "Geçersiz adres.",
-                    change_lang: "Dil Türkçe olarak değiştirildi"
+                    meta_missing: "MetaMask Eksik", meta_desc: "LÃ¼tfen tarayÄ±cÄ±nÄ±za MetaMask eklentisini yÃ¼kleyin!",
+                    processing: "Ä°ÅŸleniyor", success: "BaÅŸarÄ±lÄ±", error: "Hata",
+                    ping_sent: "Ping iÅŸlemi blokzincirine gÃ¶nderiliyor...", ping_confirmed: "Ping onaylandÄ±! SayaÃ§ sÄ±fÄ±rlandÄ±.",
+                    deposit_title: "ğŸ’° ETH YatÄ±r", deposit_content: "Kontrata yatÄ±rmak istediÄŸiniz ETH miktarÄ±nÄ± girin:", deposit_send: "YatÄ±rÄ±mÄ± GÃ¶nder", deposit_success: "YatÄ±rÄ±m BaÅŸarÄ±lÄ±",
+                    deposit_failed: "YatÄ±rma iÅŸlemi baÅŸarÄ±sÄ±z",
+                    withdraw_progress: "Acil durum Ã§ekimi yapÄ±lÄ±yor...", withdraw_complete: "Acil durum Ã§ekimi tamamlandÄ±!", no_balance: "Bakiye Yok", access_denied: "EriÅŸim Reddedildi", withdraw_failed: "Ã‡ekim baÅŸarÄ±sÄ±z",
+                    oracle_progress: "Oracle Sinyali gÃ¶nderiliyor...", oracle_triggered: "ORACLE TETÄ°KLENDÄ°", oracle_confirmed: "Oracle sinyali onaylandÄ±! VarlÄ±klar transfer edildi.",
+                    ben_title: "Varisi DeÄŸiÅŸtir", ben_content: "Yeni Ethereum adresini girin (0x...):", ben_success: "Varis adresi gÃ¼ncellendi!", invalid_addr: "GeÃ§ersiz adres.",
+                    change_lang: "Dil TÃ¼rkÃ§e olarak deÄŸiÅŸtirildi"
                 },
                 roadmap: {
-                    title: "Yol Haritası", subtitle: "Gelişim Süreci",
-                    phase1_title: "Konsept", phase1_item1: "Protokol Tasarımı", phase1_item2: "Beyaz Kağıt (Whitepaper)",
+                    title: "Yol HaritasÄ±", subtitle: "GeliÅŸim SÃ¼reci",
+                    phase1_title: "Konsept", phase1_item1: "Protokol TasarÄ±mÄ±", phase1_item2: "Beyaz KaÄŸÄ±t (Whitepaper)",
                     phase2_title: "Lansman", phase2_item1: "Beta Testleri", phase2_item2: "Halka Arz",
-                    phase3_title: "Büyüme", phase3_item1: "Mobil Uygulama", phase3_item2: "Global Pazarlama",
-                    phase4_title: "Olgunluk", phase4_item1: "Tam Otonomi", phase4_item2: "DAO Yönetimi"
+                    phase3_title: "BÃ¼yÃ¼me", phase3_item1: "Mobil Uygulama", phase3_item2: "Global Pazarlama",
+                    phase4_title: "Olgunluk", phase4_item1: "Tam Otonomi", phase4_item2: "DAO YÃ¶netimi"
                 },
                 architecture: {
                     title: "Protokol Mimarisi",
-                    subtitle: "Matematiksel Kesinlik İçin Tasarlandı",
-                    step1_title: "Tetikleme Olayı", step1_desc: "Oracle ağı, sağlık ve sosyal API'lardan 'Nabız Yok' sinyalini tespit eder.",
-                    step2_title: "Zaman Kilidi Aşaması", step2_desc: "Hatalı alarm durumunda sahibine iptal imkanı tanıyan bekleme süresi başlar.",
-                    step3_title: "Gözetimsiz Transfer", step3_desc: "Varlıklar akıllı kontrat üzerinden doğrudan varislerin cüzdanlarına aktarılır."
+                    subtitle: "Matematiksel Kesinlik Ä°Ã§in TasarlandÄ±",
+                    step1_title: "Tetikleme OlayÄ±", step1_desc: "Oracle aÄŸÄ±, saÄŸlÄ±k ve sosyal API'lardan 'NabÄ±z Yok' sinyalini tespit eder.",
+                    step2_title: "Zaman Kilidi AÅŸamasÄ±", step2_desc: "HatalÄ± alarm durumunda sahibine iptal imkanÄ± tanÄ±yan bekleme sÃ¼resi baÅŸlar.",
+                    step3_title: "GÃ¶zetimsiz Transfer", step3_desc: "VarlÄ±klar akÄ±llÄ± kontrat Ã¼zerinden doÄŸrudan varislerin cÃ¼zdanlarÄ±na aktarÄ±lÄ±r."
                 },
                 security: {
-                    title: "Kristalize Güvenlik",
-                    subtitle: "Çok Katmanlı Güven Gerektirmeyen Koruma",
-                    card1_title: "Sıfır Bilgi Kanıtları (ZK)", card1_desc: "Hassas tıbbi verileri blokzincirine sızdırmadan koşulları doğrular.",
-                    card2_title: "Değişmez Mantık", card2_desc: "Bir kez yayına alındığında, miras mantığı biz dahil hiç kimse tarafından değiştirilemez.",
-                    card3_title: "Donanım Entegrasyonu", card3_desc: "Üst düzey varlık koruması için soğuk cüzdanlarla arayüz oluşturacak şekilde tasarlandı."
+                    title: "Kristalize GÃ¼venlik",
+                    subtitle: "Ã‡ok KatmanlÄ± GÃ¼ven Gerektirmeyen Koruma",
+                    card1_title: "SÄ±fÄ±r Bilgi KanÄ±tlarÄ± (ZK)", card1_desc: "Hassas tÄ±bbi verileri blokzincirine sÄ±zdÄ±rmadan koÅŸullarÄ± doÄŸrular.",
+                    card2_title: "DeÄŸiÅŸmez MantÄ±k", card2_desc: "Bir kez yayÄ±na alÄ±ndÄ±ÄŸÄ±nda, miras mantÄ±ÄŸÄ± biz dahil hiÃ§ kimse tarafÄ±ndan deÄŸiÅŸtirilemez.",
+                    card3_title: "DonanÄ±m Entegrasyonu", card3_desc: "Ãœst dÃ¼zey varlÄ±k korumasÄ± iÃ§in soÄŸuk cÃ¼zdanlarla arayÃ¼z oluÅŸturacak ÅŸekilde tasarlandÄ±."
                 },
                 audit: {
-                    title: "Güvenlik ve İtimat",
-                    subtitle: "Endüstri Standartları ile Doğrulandı",
-                    badge1: "CertiK Doğrulanmış", badge2: "OpenZeppelin Standartları", badge3: "Hacken Denetlenmiş",
-                    report_title: "Güvenlik Denetim Raporu Özeti",
-                    report_status: "GEÇTİ", report_score: "Güvenlik Skoru: 98/100",
-                    vulnerabilities: "Kritik Güvenlik Açığı: 0",
-                    logic_check: "Akıllı Kontrat Mantık Bütünlüğü: Doğrulandı"
+                    title: "GÃ¼venlik ve Ä°timat",
+                    subtitle: "EndÃ¼stri StandartlarÄ± ile DoÄŸrulandÄ±",
+                    badge1: "Ic Test Paketi", badge2: "OpenZeppelin Standartlari", badge3: "Elle Inceleme",
+                    report_title: "GÃ¼venlik Denetim Raporu Ã–zeti",
+                    report_status: "GECIYOR", report_score: "Kapsam Ozeti",
+                    vulnerabilities: "Kritik GÃ¼venlik AÃ§Ä±ÄŸÄ±: 0",
+                    logic_check: "AkÄ±llÄ± Kontrat MantÄ±k BÃ¼tÃ¼nlÃ¼ÄŸÃ¼: DoÄŸrulandÄ±"
                 }
             }
         };
+
+        TRANSLATIONS.tr = TRANSLATIONS_TR_OVERRIDE;
 
         // --- ICONS ---
         const Shield = (props) => <svg {...props} width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>;
@@ -623,7 +784,7 @@
             return (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center glass-overlay animate-fade-in" onClick={onClose}>
                     <div className="bg-white dark:bg-brand-panel p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 relative border border-gray-100 dark:border-gray-700 transition-colors flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition z-10">✕</button>
+                        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition z-10">âœ•</button>
                         <div className="overflow-y-auto pr-2 custom-scrollbar">
                             <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 text-brand-blue rounded-xl flex items-center justify-center mb-4"><Shield /></div>
                             <h3 className="text-2xl font-bold mb-2 text-gray-900 dark:text-white">{title}</h3>
@@ -684,173 +845,280 @@
             </div>
         );
 
-        const ProfileView = ({ walletAddress, translate, setView }) => {
+        const HistoryView = ({ translate }) => {
             return (
                 <div className="space-y-8 animate-fade-in max-w-7xl mx-auto w-full p-6 md:p-8">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between mb-4">
                         <div>
-                            <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Account Profile</h2>
-                            <p className="text-gray-500 text-sm">Security & Account Settings</p>
-                        </div>
-                        <button onClick={() => setView('dashboard')} className="px-5 py-2.5 bg-white dark:bg-brand-panel rounded-xl text-sm font-bold flex items-center gap-2 border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800 transition shadow-sm">
-                            <svg className="rotate-180" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
-                            Back to Dashboard
-                        </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                        {/* Profile Header Card */}
-                        <div className="md:col-span-2 bg-white dark:bg-brand-panel p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-xl relative overflow-hidden group">
-                            <div className="absolute top-0 right-0 w-96 h-96 bg-brand-blue/5 rounded-full blur-[100px] -translate-y-1/2 translate-x-1/2"></div>
-                            <div className="relative z-10 flex flex-col md:flex-row items-center gap-8">
-                                <div className="w-32 h-32 rounded-[2rem] bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 p-1 shadow-2xl">
-                                    <div className="w-full h-full bg-white dark:bg-brand-panel rounded-[1.8rem] flex items-center justify-center overflow-hidden">
-                                        <div className="text-5xl animate-bounce">💎</div>
-                                    </div>
-                                </div>
-                                <div className="text-center md:text-left flex-1">
-                                    <div className="text-[10px] font-black text-brand-blue uppercase tracking-[0.2em] mb-2 bg-blue-50 dark:bg-blue-900/30 px-3 py-1 rounded-full inline-block">Verified Legacy Holder</div>
-                                    <h3 className="text-2xl md:text-3xl font-mono font-bold text-gray-900 dark:text-white break-all mb-4">{walletAddress}</h3>
-                                    <div className="flex flex-wrap items-center justify-center md:justify-start gap-4">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                            <span className="text-sm font-bold text-gray-600 dark:text-gray-400">Vault Protocol Active</span>
-                                        </div>
-                                        <div className="w-1.5 h-1.5 bg-gray-300 dark:bg-gray-700 rounded-full hidden md:block"></div>
-                                        <div className="text-sm font-bold text-gray-600 dark:text-gray-400 flex items-center gap-2">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                                            Hardware Level Security
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Quick Cash-out / Staking Mock */}
-                        <div className="bg-brand-blue p-8 rounded-[2rem] text-white shadow-2xl shadow-brand-blue/30 relative overflow-hidden group">
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-white/20 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2 group-hover:scale-150 transition-transform duration-700"></div>
-                            <h4 className="text-xs font-black opacity-80 uppercase tracking-widest mb-4">Current Net Worth</h4>
-                            <div className="text-4xl lg:text-5xl font-mono font-black mb-2">12.45<span className="text-xl opacity-60 ml-2">ETH</span></div>
-                            <div className="text-blue-100 font-bold text-lg">≈ $40,389.00 USD</div>
-                            <div className="mt-8 pt-8 border-t border-white/10 flex justify-between items-end">
-                                <div>
-                                    <p className="text-[10px] font-black text-blue-200 mb-1">STAKING REWARD</p>
-                                    <p className="text-xl font-bold">+4.5% APR</p>
-                                </div>
-                                <button className="p-3 bg-white text-brand-blue rounded-2xl font-black hover:bg-blue-50 transition active:scale-95 shadow-lg">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
-                                </button>
-                            </div>
+                            <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Activity Log</h2>
+                            <p className="text-gray-500 text-sm">System events and transaction history</p>
                         </div>
                     </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                        {/* Settings - Redesigned as Glass */}
-                        <div className="md:col-span-2 bg-white dark:bg-brand-panel p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-xl font-black text-gray-900 dark:text-white mb-8">Security & Privacy</h4>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div className="p-6 bg-gray-50/50 dark:bg-black/20 rounded-2xl border border-gray-100 dark:border-gray-800 group hover:border-brand-blue/30 transition cursor-pointer">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 text-brand-blue rounded-xl flex items-center justify-center">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                                        </div>
-                                        <div className="w-12 h-6 bg-blue-500 rounded-full flex items-center px-1"><div className="w-4 h-4 bg-white rounded-full ml-auto shadow-sm"></div></div>
-                                    </div>
-                                    <div className="text-sm font-black dark:text-white mb-1">Two-Factor Auth</div>
-                                    <p className="text-xs text-gray-500">Requires signature for any dashboard change</p>
-                                </div>
-                                <div className="p-6 bg-gray-50/50 dark:bg-black/20 rounded-2xl border border-gray-100 dark:border-gray-800 group hover:border-brand-blue/30 transition cursor-pointer">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 text-purple-600 rounded-xl flex items-center justify-center">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3zm-5.01 4a2 2 0 0 1-3.98 0"></path></svg>
-                                        </div>
-                                        <div className="w-12 h-6 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center px-1"><div className="w-4 h-4 bg-white rounded-full shadow-sm"></div></div>
-                                    </div>
-                                    <div className="text-sm font-black dark:text-white mb-1">Push Notifications</div>
-                                    <p className="text-xs text-gray-500">Get browser alerts for vault pings</p>
-                                </div>
-                                <div className="p-6 bg-gray-50/50 dark:bg-black/20 rounded-2xl border border-gray-100 dark:border-gray-800 group hover:border-brand-blue/30 transition cursor-pointer">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="w-10 h-10 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded-xl flex items-center justify-center">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M12 2a10 10 0 0 1 10 10h-10V2z"></path><path d="M12 12L2.69 7"></path><path d="M12 12l4.58 8.02"></path></svg>
-                                        </div>
-                                        <span className="text-[10px] font-black text-orange-600">PENDING AUDIT</span>
-                                    </div>
-                                    <div className="text-sm font-black dark:text-white mb-1">Social Recovery</div>
-                                    <p className="text-xs text-gray-500">Enable friends to help recover access</p>
-                                </div>
-                                <div className="p-6 bg-blue-600 rounded-2xl transition cursor-pointer shadow-lg shadow-blue-500/20">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="w-10 h-10 bg-white/20 text-white rounded-xl flex items-center justify-center">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
-                                        </div>
-                                    </div>
-                                    <div className="text-sm font-black text-white mb-1">Connect Multi-Sig</div>
-                                    <p className="text-xs text-blue-100">Add Gnosis Safe integration</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Recent Sessions */}
-                        <div className="bg-white dark:bg-brand-panel p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-sm h-full">
-                            <h4 className="text-xl font-black text-gray-900 dark:text-white mb-8">Access Logs</h4>
-                            <div className="space-y-6">
-                                {[
-                                    { device: "Chrome / Windows 11", date: "Just now", status: "Active Session" },
-                                    { device: "MetaMask Mobile / iOS", date: "4 hours ago", status: "Closed" },
-                                    { device: "Brave / MacOS", date: "Feb 10, 21:45", status: "Closed" }
-                                ].map((session, i) => (
-                                    <div key={i} className="flex gap-4">
-                                        <div className="w-10 h-10 bg-gray-50 dark:bg-black/30 rounded-full flex-shrink-0 flex items-center justify-center text-lg">
-                                            {session.device.includes("Mobile") ? "📱" : "💻"}
-                                        </div>
-                                        <div className="flex-1 border-b border-gray-50 dark:border-gray-800 pb-4 last:border-0">
-                                            <div className="text-sm font-black dark:text-white">{session.device}</div>
-                                            <div className="flex justify-between items-center mt-1">
-                                                <span className="text-xs text-gray-500 font-bold uppercase tracking-tighter">{session.date}</span>
-                                                <span className={`text-[10px] font-black uppercase tracking-widest ${session.status === 'Active Session' ? 'text-green-500' : 'text-gray-400'}`}>{session.status}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                            <button className="w-full mt-6 py-3 text-xs font-black text-red-500 bg-red-50 dark:bg-red-900/10 rounded-xl hover:bg-red-100 transition">SIGN OUT FROM ALL DEVICES</button>
+                    
+                    <div className="bg-white dark:bg-[#15191F] border border-gray-200 dark:border-gray-800 rounded-[2rem] overflow-hidden shadow-xl">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-gray-50 dark:bg-black/20 border-b border-gray-100 dark:border-gray-800">
+                                    <tr>
+                                        <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-widest">Event Type</th>
+                                        <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-widest">Status</th>
+                                        <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-widest">Time</th>
+                                        <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-widest">Tx Hash</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                                    {[
+                                        { type: "Proof of Life Ping", icon: "ğŸ’“", status: "Success", time: "10 mins ago", hash: "0x8f4...b2c" },
+                                        { type: "Heir Added", icon: "ğŸ‘¥", status: "Success", time: "2 days ago", hash: "0x3e1...a90" },
+                                        { type: "Asset Deposited", icon: "ğŸ’°", status: "Success", time: "5 days ago", hash: "0x1b4...d77" },
+                                        { type: "Oracle Triggered", icon: "ğŸ›¡ï¸", status: "Pending", time: "1 week ago", hash: "0x9c2...e44" },
+                                        { type: "Contract Deployed", icon: "ğŸš€", status: "Success", time: "2 weeks ago", hash: "0x5a1...f33" }
+                                    ].map((log, i) => (
+                                        <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white/5 transition-colors group">
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-black/30 flex items-center justify-center text-lg">{log.icon}</div>
+                                                    <span className="font-bold text-gray-900 dark:text-white">{log.type}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${log.status === 'Success' ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' : 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400'}`}>
+                                                    {log.status}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-500 font-bold">{log.time}</td>
+                                            <td className="px-6 py-4">
+                                                <a href="#" className="text-brand-blue hover:underline font-mono text-sm">{log.hash}</a>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
             );
         };
 
-        const Dashboard = ({ walletAddress, onDisconnect, openModal, beneficiaryAddress, openChangeBeneficiaryModal, signer, toggleTheme, darkMode, translate, currentLang, switchLanguage, setModal, setModalInputValue }) => {
+        const SupportView = ({ translate }) => {
+            return (
+                <div className="space-y-8 animate-fade-in max-w-7xl mx-auto w-full p-6 md:p-8">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Help & Support</h2>
+                            <p className="text-gray-500 text-sm">Need help? We are here for you.</p>
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="lg:col-span-2 space-y-6">
+                            <div className="bg-white dark:bg-[#15191F] p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-xl">
+                                <h3 className="text-xl font-black mb-6 dark:text-white">Frequently Asked Questions</h3>
+                                <div className="space-y-4">
+                                    {[
+                                        { q: "How does the Dead Man's Switch work?", a: "The smart contract requires you to 'ping' it periodically. If the timer runs out, it assumes you are incapacitated and allows beneficiaries to claim assets." },
+                                        { q: "What happens if I lose my wallet?", a: "LegacyChain does not move private keys. Wallet recovery stays with your wallet provider, while inheritance rules remain on-chain." },
+                                        { q: "Are my assets locked?", a: "No, you maintain full control of your assets and can withdraw them at any time before the timer expires." }
+                                    ].map((faq, i) => (
+                                        <div key={i} className="p-4 bg-gray-50 dark:bg-black/20 rounded-xl border border-gray-100 dark:border-gray-800">
+                                            <h4 className="font-bold text-gray-900 dark:text-white mb-2">{faq.q}</h4>
+                                            <p className="text-sm text-gray-500 leading-relaxed">{faq.a}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="space-y-6">
+                            <div className="bg-gradient-to-br from-brand-blue to-purple-600 p-8 rounded-[2rem] text-white shadow-xl relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl"></div>
+                                <h3 className="text-xl font-black mb-2 relative z-10">Documentation</h3>
+                                <p className="text-sm text-blue-100 mb-6 relative z-10">Use the local docs, deploy scripts, and test suite to verify every workflow.</p>
+                                <button onClick={() => openEtherscan()} className="w-full py-3 bg-white text-brand-blue font-black rounded-xl shadow-lg hover:scale-[1.02] transition-transform relative z-10">Open Active Vault</button>
+                            </div>
+                            
+                            <div className="bg-white dark:bg-[#15191F] p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-xl">
+                                <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-6">Community</h3>
+                                <div className="space-y-3">
+                                    <div className="flex items-center gap-3 p-3 rounded-xl transition">
+                                        <div className="w-10 h-10 rounded-full bg-[#5865F2]/10 text-[#5865F2] flex items-center justify-center"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg></div>
+                                        <span className="font-bold dark:text-white">Project Workspace</span>
+                                    </div>
+                                    <div className="flex items-center gap-3 p-3 rounded-xl transition">
+                                        <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white flex items-center justify-center"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></div>
+                                        <span className="font-bold dark:text-white">Technical Notes</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
 
-            // ---Live countdown and asset transfer for the demo video ---
+        const ProfileView = ({ walletAddress, onDisconnect }) => {
+            const [pushNotif, setPushNotif] = React.useState(("Notification" in window) && Notification.permission === "granted");
+            const [notificationEmail, setNotificationEmail] = React.useState("");
+            const [notificationStatus, setNotificationStatus] = React.useState("");
+            const [backendApiKey, setBackendApiKey] = React.useState(localStorage.getItem(BACKEND_API_KEY_STORAGE_KEY) || "");
+
+            const saveBackendApiKey = () => {
+                if (backendApiKey.trim()) {
+                    localStorage.setItem(BACKEND_API_KEY_STORAGE_KEY, backendApiKey.trim());
+                    setNotificationStatus("Backend API key saved.");
+                } else {
+                    localStorage.removeItem(BACKEND_API_KEY_STORAGE_KEY);
+                    setNotificationStatus("Backend API key cleared.");
+                }
+            };
+
+            const registerEmailNotification = async () => {
+                if (!notificationEmail || !notificationEmail.includes("@")) {
+                    setNotificationStatus("Enter a valid email address.");
+                    return;
+                }
+                try {
+                    const response = await fetch(`${ORACLE_BACKEND_URL}/api/notifications/register`, {
+                        method: "POST",
+                        headers: backendHeaders(),
+                        body: JSON.stringify({ userAddress: walletAddress, email: notificationEmail })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || "Notification backend unavailable.");
+                    setNotificationStatus("Email notifications registered.");
+                } catch (err) {
+                    setNotificationStatus(err.message);
+                }
+            };
+
+            const sendTestEmailNotification = async () => {
+                if (!notificationEmail || !notificationEmail.includes("@")) {
+                    setNotificationStatus("Register an email first.");
+                    return;
+                }
+                try {
+                    const response = await fetch(`${ORACLE_BACKEND_URL}/api/notifications/test`, {
+                        method: "POST",
+                        headers: backendHeaders(),
+                        body: JSON.stringify({ userAddress: walletAddress, email: notificationEmail })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || "Test email could not be sent.");
+                    setNotificationStatus(result.success ? "Test email sent." : (result.reason || "Notification not sent."));
+                } catch (err) {
+                    setNotificationStatus(err.message);
+                }
+            };
+
+            const togglePush = async () => {
+                if (!("Notification" in window)) {
+                    setNotificationStatus("This browser does not support notifications.");
+                    return;
+                }
+                if (Notification.permission === "granted") {
+                    setPushNotif(true);
+                    new Notification("LegacyChain notifications active", {
+                        body: "Browser alerts will be shown for vault activity."
+                    });
+                    return;
+                }
+                const permission = await Notification.requestPermission();
+                setPushNotif(permission === "granted");
+                setNotificationStatus(permission === "granted" ? "Browser notifications enabled." : "Notification permission denied.");
+            };
+
+            return (
+                <div className="space-y-8 animate-fade-in max-w-7xl mx-auto w-full p-6 md:p-8">
+                    <div>
+                        <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Vault Profile</h2>
+                        <p className="text-gray-500 text-sm">Real notification settings and current wallet session</p>
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="bg-white dark:bg-[#15191F] p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-xl">
+                            <div className="w-16 h-16 rounded-2xl bg-blue-100 dark:bg-blue-900/30 text-brand-blue flex items-center justify-center mb-5">
+                                <Wallet width="28" height="28" />
+                            </div>
+                            <div className="text-[10px] font-black text-brand-blue uppercase tracking-[0.2em] mb-2">Active Session</div>
+                            <div className="text-sm font-mono text-gray-700 dark:text-gray-300 break-all mb-4">{walletAddress}</div>
+                            <div className="space-y-3 text-sm text-gray-500 dark:text-gray-400">
+                                <div>Vault actions require the connected wallet signature.</div>
+                                <div>No fake KYC, subscription, SMS, or social recovery layer is shown here.</div>
+                            </div>
+                            <button onClick={onDisconnect} className="w-full mt-8 py-3 bg-red-50 dark:bg-red-900/10 text-red-500 rounded-xl font-black hover:bg-red-100 transition">Disconnect Current Wallet</button>
+                        </div>
+                        <div className="lg:col-span-2 space-y-8">
+                            <div className="bg-brand-blue p-8 rounded-[2rem] text-white shadow-xl">
+                                <h3 className="text-xl font-black mb-2">Backend Access</h3>
+                                <p className="text-blue-100 text-sm mb-5">Store the API key used by the local oracle backend.</p>
+                                <div className="flex flex-col md:flex-row gap-3">
+                                    <input type="password" value={backendApiKey} onChange={(e) => setBackendApiKey(e.target.value)} placeholder="X-API-Key" className="min-w-0 flex-1 px-4 py-3 rounded-xl bg-white/15 border border-white/20 text-white placeholder:text-blue-100 outline-none focus:border-white" />
+                                    <button onClick={saveBackendApiKey} className="px-5 py-3 bg-white text-brand-blue rounded-xl font-black hover:bg-blue-50 transition">Save API Key</button>
+                                </div>
+                            </div>
+                            <div className="bg-white dark:bg-[#15191F] p-8 rounded-[2rem] border border-gray-200 dark:border-gray-800 shadow-xl">
+                                <h3 className="text-xl font-black mb-6 dark:text-white">Notifications</h3>
+                                <div className="space-y-5">
+                                    <div className="p-5 bg-gray-50 dark:bg-black/20 rounded-2xl border border-gray-100 dark:border-gray-800">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div>
+                                                <div className="text-sm font-black dark:text-white">Browser Push</div>
+                                                <div className="text-xs text-gray-500">Uses the browser Notification API.</div>
+                                            </div>
+                                            <button onClick={togglePush} className={`px-4 py-2 rounded-xl font-black text-xs ${pushNotif ? 'bg-green-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200'}`}>{pushNotif ? 'Enabled' : 'Enable'}</button>
+                                        </div>
+                                    </div>
+                                    <div className="p-5 bg-gray-50 dark:bg-black/20 rounded-2xl border border-gray-100 dark:border-gray-800">
+                                        <div className="text-sm font-black dark:text-white mb-2">Email Alerts</div>
+                                        <div className="text-xs text-gray-500 mb-4">Registers a real backend email endpoint for grace period and claim alerts.</div>
+                                        <input type="email" value={notificationEmail} onChange={(e) => setNotificationEmail(e.target.value)} placeholder="you@example.com" className="w-full px-4 py-3 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-brand-blue" />
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                                            <button onClick={registerEmailNotification} className="py-3 bg-brand-blue text-white rounded-xl font-black hover:bg-blue-700 transition">Register Email</button>
+                                            <button onClick={sendTestEmailNotification} className="py-3 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl font-black hover:bg-gray-200 dark:hover:bg-gray-700 transition">Send Test</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                {notificationStatus && <div className="mt-4 text-sm font-bold text-brand-blue">{notificationStatus}</div>}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Dashboard = ({ walletAddress, onDisconnect, openModal, signer, toggleTheme, darkMode, translate, currentLang, switchLanguage, setModal, setModalInputValue }) => {
+
+            // --- live vault state ---
             const [timeLeft, setTimeLeft] = useState(300);
+            const [totalTimeLimit, setTotalTimeLimit] = useState(300);
             const [isTransferred, setIsTransferred] = useState(false);
             const [balance, setBalance] = useState("0.00");
             const [recentActivity, setRecentActivity] = useState([]);
-
-            // ORACLE SIMULATION STATE
-            const [heartRate, setHeartRate] = useState(72);
-
-            // AI HEALTH MONITORING STATE
-            const [aiHealthScore, setAiHealthScore] = useState(95);
-            const [aiPrediction, setAiPrediction] = useState("LOW RISK");
+            const [riskEngine, setRiskEngine] = useState({
+                safetyScore: 100,
+                status: "LOW",
+                action: "Keep regular proof-of-life pings active.",
+                explanation: "Vault state is healthy."
+            });
             const [lastTxHash, setLastTxHash] = useState(null);
 
             // NEW: Multi-Heir State
             const [heirs, setHeirs] = useState([]);
             const [showHeirPanel, setShowHeirPanel] = useState(false);
 
-            // NEW: ETH/USD Price State (Chainlink simulation)
+            // NEW: ETH/USD Price State
             const [ethPrice, setEthPrice] = useState(3245.67);
             const [priceChange, setPriceChange] = useState(2.34);
 
             // NEW: Oracle Activity Log
             const [oracleLog, setOracleLog] = useState([
-                { time: "21:35:12", source: "HealthKit", event: "Heartbeat detected", status: "OK" },
-                { time: "21:34:45", source: "Gov.TR", event: "Status verified", status: "OK" },
-                { time: "21:33:21", source: "Twitter", event: "Recent login", status: "OK" }
+                { time: "--:--:--", source: "Registry", event: "Awaiting authority attestations", status: "READY" }
             ]);
+            const [oracleSystemStatus, setOracleSystemStatus] = useState({
+                authorities: [],
+                configuredAuthorityRoles: [],
+                notificationSubscribers: 0,
+                totalCases: 0
+            });
 
             // NEW: QR Code State
             const [showQR, setShowQR] = useState(false);
@@ -860,6 +1128,9 @@
             const [isGracePeriod, setIsGracePeriod] = useState(false);
             const [graceTimeLeft, setGraceTimeLeft] = useState(0);
             const [isDeathConfirmed, setIsDeathConfirmed] = useState(false);
+            const [oracleCase, setOracleCase] = useState({ caseId: null, status: "NONE", openedAt: null, source: "idle" });
+            const [oracleCategories, setOracleCategories] = useState({ government: false, health: false, legal: false });
+            const [oracleConsensusReady, setOracleConsensusReady] = useState(false);
 
             // NEW: View State (Dashboard vs Profile)
             const [currentView, setCurrentView] = useState('dashboard');
@@ -872,7 +1143,7 @@
                     if (!activeContract.isAdvanced) return;
                     const contract = new ethers.Contract(activeContract.address, activeContract.abi, signer);
                     const tx = await contract.recordActivity();
-                    console.log("👻 Activity Recorded (Ghost Ping):", tx.hash);
+                    console.log("ğŸ‘» Activity Recorded (Ghost Ping):", tx.hash);
                     setLastTxHash(tx.hash);
                 } catch (e) {
                     console.log("Activity recording failed (expected if not owner or no change):", e.message);
@@ -888,7 +1159,8 @@
                         if (!activeContract.isAdvanced) return;
                         const contract = new ethers.Contract(activeContract.address, activeContract.abi, signer);
                         const heirData = await contract.getAllHeirs();
-                        const formatted = heirData.map(h => ({
+                        const formatted = heirData.map((h, index) => ({
+                            index,
                             wallet: h.wallet.slice(0, 6) + '...' + h.wallet.slice(-4),
                             fullWallet: h.wallet,
                             percentage: Number(h.percentage),
@@ -896,9 +1168,9 @@
                             isActive: h.isActive
                         }));
                         setHeirs(formatted);
-                        console.log('✅ Blockchain\'den heirs yüklendi:', formatted);
+                        console.log('âœ… Blockchain\'den heirs yÃ¼klendi:', formatted);
                     } catch (err) {
-                        console.error('❌ Heirs yüklenemedi:', err.message);
+                        console.error('âŒ Heirs yÃ¼klenemedi:', err.message);
                     }
                 };
                 loadHeirs();
@@ -906,14 +1178,101 @@
                 return () => clearInterval(interval);
             }, [signer]);
 
-            // Chainlink Price Feed simulation
             useEffect(() => {
-                const priceInterval = setInterval(() => {
-                    const change = (Math.random() - 0.5) * 50;
-                    setEthPrice(prev => Math.max(3000, Math.min(3500, prev + change)));
-                    setPriceChange((Math.random() - 0.3) * 5);
-                }, 5000);
-                return () => clearInterval(priceInterval);
+                if (!walletAddress) return;
+
+                let isMounted = true;
+                const loadCaseState = async () => {
+                    try {
+                        const response = await fetch(`${ORACLE_BACKEND_URL}/api/check-death/${walletAddress}`);
+                        const result = await response.json();
+                        if (!response.ok || !isMounted) return;
+
+                        setOracleCase({
+                            caseId: result.caseId || result.storedCase?.caseId || null,
+                            status: result.caseStatus || "NONE",
+                            openedAt: result.storedCase?.openedAt || null,
+                            source: result.storedCase ? "backend" : "chain"
+                        });
+                        setOracleCategories(result.categoriesSeen || { government: false, health: false, legal: false });
+                        setOracleConsensusReady(Boolean(result.consensusReady));
+                    } catch (_) {
+                        if (!isMounted) return;
+                    }
+                };
+
+                loadCaseState();
+                const interval = setInterval(loadCaseState, 10000);
+                return () => {
+                    isMounted = false;
+                    clearInterval(interval);
+                };
+            }, [walletAddress]);
+
+            useEffect(() => {
+                let isMounted = true;
+
+                const loadOracleStatus = async () => {
+                    try {
+                        const response = await fetch(`${ORACLE_BACKEND_URL}/api/status`);
+                        const result = await response.json();
+                        if (!response.ok || !isMounted) return;
+
+                        setOracleSystemStatus({
+                            authorities: result.authorities || [],
+                            configuredAuthorityRoles: result.configuredAuthorityRoles || [],
+                            notificationSubscribers: result.notificationSubscribers || 0,
+                            totalCases: result.totalCases || 0
+                        });
+
+                        if (Array.isArray(result.signalLog) && result.signalLog.length > 0) {
+                            setOracleLog(result.signalLog.slice().reverse().map((entry) => ({
+                                time: new Date(entry.timestamp).toLocaleTimeString(),
+                                source: entry.role || entry.authority || "Authority",
+                                event: entry.signatureMode === "EIP712"
+                                    ? `Signed attestation ${entry.metadataHash?.slice(0, 10) || ""}`
+                                    : `Attestation ${entry.metadataHash?.slice(0, 10) || ""}`,
+                                status: entry.caseStatus || (entry.isConfirmed ? "ATTESTED" : "RECORDED")
+                            })));
+                        }
+                    } catch (_) {
+                        if (!isMounted) return;
+                    }
+                };
+
+                loadOracleStatus();
+                const interval = setInterval(loadOracleStatus, 12000);
+                return () => {
+                    isMounted = false;
+                    clearInterval(interval);
+                };
+            }, []);
+
+            // ETH/USD price with CoinGecko fallback
+            useEffect(() => {
+                let isMounted = true;
+                const applyLocalPriceFallback = () => {
+                    setEthPrice((prev) => prev || 3200);
+                    setPriceChange(0);
+                };
+                const loadEthPrice = async () => {
+                    try {
+                        const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true");
+                        if (!response.ok) throw new Error("CoinGecko unavailable");
+                        const data = await response.json();
+                        if (!isMounted || !data.ethereum) return;
+                        setEthPrice(data.ethereum.usd);
+                        setPriceChange(data.ethereum.usd_24h_change || 0);
+                    } catch (err) {
+                        applyLocalPriceFallback();
+                    }
+                };
+                loadEthPrice();
+                const priceInterval = setInterval(loadEthPrice, 60000);
+                return () => {
+                    isMounted = false;
+                    clearInterval(priceInterval);
+                };
             }, []);
 
             // Etherscan link function
@@ -938,13 +1297,18 @@
                         // Read timeLeft
                         const t = await contract.timeLeft();
                         const remaining = Number(t.toString());
-                        console.log("📡 Blockchain'den okunan timeLeft:", remaining);
+                        console.log("ğŸ“¡ Blockchain'den okunan timeLeft:", remaining);
+
+                        if (activeContract.isAdvanced && typeof contract.timeLimit === "function") {
+                            const totalLimit = await contract.timeLimit();
+                            setTotalTimeLimit(Number(totalLimit.toString()));
+                        }
 
                         // Read balance
                         const bal = await contract.currentBalance();
                         const balEth = ethers.utils.formatEther(bal);
                         setBalance(parseFloat(balEth).toFixed(4));
-                        console.log("💰 Contract balance:", balEth, "ETH");
+                        console.log("ğŸ’° Contract balance:", balEth, "ETH");
 
                         if (remaining > 0) {
                             setTimeLeft(remaining);
@@ -959,7 +1323,7 @@
                             }
                         }
                     } catch (err) {
-                        console.error("❌ Blockchain veri okunamadı:", err.message);
+                        console.error("âŒ Blockchain veri okunamadÄ±:", err.message);
                     }
                 };
 
@@ -976,25 +1340,28 @@
                 return () => clearInterval(balInterval);
             }, [signer]);
 
-            // AI Health Score simulation - updates every 2 seconds
             useEffect(() => {
-                const aiInterval = setInterval(() => {
-                    // Random health score between 70-100
-                    const newScore = Math.floor(70 + Math.random() * 30);
-                    setAiHealthScore(newScore);
-
-                    // Update prediction based on score
-                    if (newScore >= 85) {
-                        setAiPrediction("LOW RISK");
-                    } else if (newScore >= 70) {
-                        setAiPrediction("MODERATE");
-                    } else {
-                        setAiPrediction("HIGH RISK");
-                    }
-                }, 2000);
-
-                return () => clearInterval(aiInterval);
-            }, []);
+                const total = Math.max(totalTimeLimit || 1, 1);
+                const remainingRatio = Math.max(0, Math.min(1, timeLeft / total));
+                let riskScore = Math.round((1 - remainingRatio) * 30);
+                riskScore += Math.min(oracleSignatures, 3) * 18;
+                if (isGracePeriod) riskScore += 25;
+                if (parseFloat(balance || "0") > 0) riskScore += 7;
+                if (heirs.filter((heir) => heir.isActive !== false).length === 0) riskScore += 10;
+                if (recentActivity.length === 0) riskScore += 4;
+                riskScore = Math.max(0, Math.min(100, riskScore));
+                const safetyScore = 100 - riskScore;
+                const status = riskScore >= 75 ? "CRITICAL" : riskScore >= 50 ? "HIGH" : riskScore >= 25 ? "WATCH" : "LOW";
+                const action = isGracePeriod
+                    ? "Review oracle evidence and cancel the grace period if the owner is active."
+                    : oracleSignatures > 0
+                        ? "Check registry attestations and authority roles."
+                        : remainingRatio < 0.25
+                            ? "Send a proof-of-life ping."
+                            : "Keep regular proof-of-life pings active.";
+                const explanation = `${Math.round(remainingRatio * 100)}% timer remaining, ${oracleSignatures} signal(s), ${heirs.filter((heir) => heir.isActive !== false).length} active heir(s).`;
+                setRiskEngine({ safetyScore, status, action, explanation });
+            }, [timeLeft, totalTimeLimit, oracleSignatures, isGracePeriod, balance, heirs, recentActivity]);
 
             // LANGUAGE STATE
             const [language, setLanguage] = useState('en');
@@ -1015,11 +1382,11 @@
             // --- ORACLE EVENT MONITOR ---
             useEffect(() => {
                 if (!signer) {
-                    console.log("⚠️ Signer yok, Oracle monitor başlatılamıyor");
+                    console.log("âš ï¸ Signer yok, Oracle monitor baÅŸlatÄ±lamÄ±yor");
                     return;
                 }
 
-                console.log("🚀 Oracle monitor başlatılıyor...");
+                console.log("ğŸš€ Oracle monitor baÅŸlatÄ±lÄ±yor...");
 
                 let intervalId;
                 let isMounted = true;
@@ -1076,7 +1443,7 @@
                 return () => {
                     isMounted = false;
                     if (intervalId) clearInterval(intervalId);
-                    console.log("🛑 Oracle monitor durduruldu");
+                    console.log("ğŸ›‘ Oracle monitor durduruldu");
                 };
             }, [signer]); // Executes only when the signer is updated.
             // --- END ORACLE MONITOR ---
@@ -1087,12 +1454,10 @@
                 if (timeLeft > 0) {
                     const timer = setTimeout(() => {
                         setTimeLeft(timeLeft - 1);
-                        // Simulate heartbeat change every second
-                        setHeartRate(70 + Math.floor(Math.random() * 15));
                     }, 1000);
                     return () => clearTimeout(timer);
                 } else if (timeLeft === 0 && !isTransferred) {
-                    // Sadece modal göster, isTransferred'i true yapma ki buton gözüksün
+                    // Sadece modal gÃ¶ster, isTransferred'i true yapma ki buton gÃ¶zÃ¼ksÃ¼n
                     openModal("PROTOCOL ALERT", "Timer Expired! Inheritance can now be claimed by the beneficiary.");
                 }
             }, [timeLeft, isTransferred]);
@@ -1124,12 +1489,8 @@
                         openModal(translate('modal.error'), "Transaction failed: " + err.message);
                     }
                 }
-                // DEMO MODE
                 else {
-                    setTimeLeft(300);
-                    setIsTransferred(false);
-                    setBalance("0.00");
-                    openModal(translate('modal.success'), "Ping sent (Demo Mode). Timer reset.");
+                    openModal(translate('modal.error'), "Connect a wallet and select a vault before sending a proof-of-life ping.");
                 }
             }
             const handleEmergencyWithdraw = async () => {
@@ -1152,9 +1513,7 @@
                         openModal(translate('modal.error'), translate('modal.withdraw_failed') + ": " + err.message);
                     }
                 } else {
-                    // DEMO MODE
-                    openModal(translate('modal.success'), "Emergency withdrawal simulated (Demo Mode).");
-                    setBalance("0.00");
+                    openModal(translate('modal.error'), "Connect a wallet and select a vault before emergency withdrawal.");
                 }
             };
 
@@ -1189,10 +1548,7 @@
                         openModal(translate('modal.error'), translate('modal.deposit_failed') + ": " + cleanError);
                     }
                 } else {
-                    // DEMO MODE
-                    openModal("Demo Mode", `Deposited ${amount} ETH (Simulated)`);
-                    setBalance(prev => (parseFloat(prev) + parseFloat(amount)).toFixed(4));
-                    setRecentActivity(prev => [{ type: 'Deposit', amount: amount + ' ETH', date: 'Just now', status: 'Success', hash: 'Simulated' }, ...prev].slice(0, 10));
+                    openModal(translate('modal.error'), "Connect a wallet and select a vault before depositing ETH.");
                 }
             };
 
@@ -1224,24 +1580,54 @@
                 if (signer) {
                     try {
                         const activeContract = getActiveContract();
-                        const contract = new ethers.Contract(activeContract.address, activeContract.abi, signer);
                         openModal(translate('modal.processing'), translate('modal.oracle_progress'));
-                        const tx = await contract.simulateOracleSignal();
-                        await tx.wait();
-                        openModal(translate('modal.success'), translate('modal.oracle_confirmed'));
+                        const response = await fetch(`${ORACLE_BACKEND_URL}/api/death-signal`, {
+                            method: "POST",
+                            headers: backendHeaders(),
+                            body: JSON.stringify({
+                                userAddress: walletAddress,
+                                authorityRole: "government",
+                                sourceType: "GOVERNMENT_REGISTRY",
+                                metadata: {
+                                    vault: activeContract.address,
+                                    requestedBy: walletAddress,
+                                    note: "Frontend authority attestation request"
+                                }
+                            })
+                        });
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.error || "Oracle backend rejected the signal.");
+                        openModal(translate('modal.success'), `Authority signal submitted. Tx: ${result.txHash || "pending"}`);
+                        setOracleCase({
+                            caseId: result.caseId || result.onChainCase?.caseId || null,
+                            status: result.caseStatus || result.onChainCase?.status || (result.isConfirmed ? "ATTESTED" : "CASE_OPEN"),
+                            openedAt: new Date().toISOString(),
+                            source: result.signatureMode === "EIP712" ? "signed-relay" : "backend"
+                        });
+                        setOracleCategories(result.categoriesSeen || { government: false, health: false, legal: false });
+                        setOracleConsensusReady(Boolean(result.consensusReady));
 
                         // Explicitly refresh signatures as well
                         if (activeContract.isAdvanced) {
+                            const contract = new ethers.Contract(activeContract.address, activeContract.abi, signer);
                             const oracleAddr = await contract.decentralizedOracle();
                             const oracleContract = new ethers.Contract(oracleAddr, ORACLE_ABI, signer);
                             const sigs = await oracleContract.signalCount(walletAddress);
                             setOracleSignatures(Number(sigs));
+                            setOracleLog(prev => [{
+                                time: new Date().toLocaleTimeString(),
+                                source: "Government",
+                                event: `Metadata hash ${result.metadataHash || "recorded"}`,
+                                status: result.signatureMode === "EIP712" ? "SIGNED" : "SUBMITTED"
+                            }, ...prev].slice(0, 10));
                         }
                     } catch (err) {
                         console.error(err);
                         const cleanError = err.message.length > 200 ? err.message.substring(0, 200) + "..." : err.message;
-                        openModal(translate('modal.error'), "Oracle Trigger failed: " + cleanError);
+                        openModal(translate('modal.error'), "Oracle signal failed: " + cleanError);
                     }
+                } else {
+                    openModal(translate('modal.error'), "Connect a wallet before submitting an oracle signal.");
                 }
             };
 
@@ -1253,12 +1639,164 @@
                         openModal(translate('modal.processing'), "Starting safety grace period...");
                         const tx = await contract.startGracePeriod();
                         await tx.wait();
+                        setOracleCase((prev) => ({ ...prev, status: "GRACE_ACTIVE" }));
                         openModal(translate('modal.success'), "Grace period started. Security timer is now running.");
                     } catch (err) {
                         console.error(err);
                         openModal(translate('modal.error'), "Failed to start grace period: " + err.message);
                     }
                 }
+            };
+
+            const handleOpenDispute = async () => {
+                if (!oracleCase.caseId) {
+                    openModal("Error", "There is no active oracle case to dispute.");
+                    return;
+                }
+
+                try {
+                    openModal("Processing", "Opening dispute review...");
+                    const response = await fetch(`${ORACLE_BACKEND_URL}/api/cases/${oracleCase.caseId}/dispute`, {
+                        method: "POST",
+                        headers: backendHeaders(),
+                        body: JSON.stringify({
+                            authorityRole: "legal",
+                            disputeReason: "owner_dispute_request"
+                        })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || "Failed to open dispute.");
+                    setOracleCase((prev) => ({ ...prev, status: "DISPUTED", source: "backend" }));
+                    setOracleConsensusReady(false);
+                    setOracleLog(prev => [{
+                        time: new Date().toLocaleTimeString(),
+                        source: "Dispute",
+                        event: "Case moved to dispute review",
+                        status: "DISPUTED"
+                    }, ...prev].slice(0, 10));
+                    openModal("Success", "Dispute opened. The case now requires review before claims can proceed.");
+                } catch (err) {
+                    console.error(err);
+                    openModal("Error", "Dispute request failed: " + err.message);
+                }
+            };
+
+            const primaryHeir = heirs.find((heir) => heir.isActive !== false);
+
+            const handleInitiatePrimaryHeirUpdate = () => {
+                if (!signer) {
+                    openModal(translate('modal.error'), "Connect a wallet before updating a heir.");
+                    return;
+                }
+                if (!primaryHeir) {
+                    openModal(translate('modal.error'), "Add an active heir before requesting an update.");
+                    return;
+                }
+
+                setModalInputValue("");
+                setModal({
+                    isOpen: true,
+                    title: "Queue Heir Update",
+                    content: `Enter the replacement wallet for ${primaryHeir.name || "the primary heir"}:`,
+                    needsInput: true,
+                    confirmAction: async (val) => {
+                        if (!val || !ethers.utils.isAddress(val.trim())) {
+                            openModal("Error", "Enter a valid Ethereum address.");
+                            return;
+                        }
+                        try {
+                            const activeContract = getActiveContract();
+                            const contract = new ethers.Contract(activeContract.address, activeContract.abi, signer);
+                            openModal("Processing", "Submitting timelocked heir update...");
+                            const tx = await contract.initiateHeirUpdate(
+                                primaryHeir.index,
+                                val.trim(),
+                                primaryHeir.percentage,
+                                primaryHeir.name || "Primary Heir"
+                            );
+                            await tx.wait();
+                            closeModal();
+                            openModal("Success", "Heir update queued. Execute it after the timelock expires.");
+                            setRecentActivity(prev => [{ type: 'Heir Update', amount: '-', date: 'Just now', status: 'Queued', hash: tx.hash.slice(0, 6) + '...' + tx.hash.slice(-4) }, ...prev].slice(0, 10));
+                        } catch (err) {
+                            console.error(err);
+                            openModal("Error", "Failed to queue heir update: " + err.message);
+                        }
+                    }
+                });
+            };
+
+            const handleExportCsv = () => {
+                const rows = [["type", "amount", "status", "date", "hash"]];
+                recentActivity.forEach((item) => rows.push([item.type, item.amount, item.status, item.date, item.hash]));
+                const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+                const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "legacychain-activity.csv";
+                link.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const createVaultFromFactory = async (factoryAddress, initialHeir) => {
+                if (!signer) {
+                    openModal(translate('modal.error'), "Connect a wallet before creating a vault.");
+                    return;
+                }
+                if (!ethers.utils.isAddress(factoryAddress) || !ethers.utils.isAddress(initialHeir)) {
+                    openModal(translate('modal.error'), "Factory and heir must be valid Ethereum addresses.");
+                    return;
+                }
+                try {
+                    const factory = new ethers.Contract(factoryAddress, VAULT_FACTORY_ABI, signer);
+                    openModal(translate('modal.processing'), "Creating your personal inheritance vault...");
+                    const tx = await factory.createVault(initialHeir, 30 * 24 * 60 * 60);
+                    await tx.wait();
+                    const vaults = await factory.getVaults(walletAddress);
+                    const vaultAddress = vaults[vaults.length - 1];
+                    localStorage.setItem(VAULT_FACTORY_STORAGE_KEY, factoryAddress);
+                    localStorage.setItem(ACTIVE_VAULT_STORAGE_KEY, vaultAddress);
+                    openModal(translate('modal.success'), `Vault created and selected: ${vaultAddress}`);
+                } catch (err) {
+                    const cleanError = err.message.length > 200 ? err.message.substring(0, 200) + "..." : err.message;
+                    openModal(translate('modal.error'), "Vault creation failed: " + cleanError);
+                }
+            };
+
+            const openVaultWizard = () => {
+                const savedFactory = localStorage.getItem(VAULT_FACTORY_STORAGE_KEY) || "";
+                if (!savedFactory) {
+                    setModalInputValue("");
+                    setModal({
+                        isOpen: true,
+                        title: "Vault Factory",
+                        content: "Enter the deployed VaultFactory address for this network.",
+                        needsInput: true,
+                        inputPlaceholder: "0x...",
+                        confirmText: "Save Factory",
+                        confirmAction: (factoryAddress) => {
+                            if (!ethers.utils.isAddress(factoryAddress)) {
+                                openModal(translate('modal.error'), "Invalid factory address.");
+                                return;
+                            }
+                            localStorage.setItem(VAULT_FACTORY_STORAGE_KEY, factoryAddress);
+                            openVaultWizard();
+                        }
+                    });
+                    return;
+                }
+
+                setModalInputValue("");
+                setModal({
+                    isOpen: true,
+                    title: "Create Inheritance Vault",
+                    content: "Enter the initial heir wallet. The vault will use a 30 day proof-of-life timer.",
+                    needsInput: true,
+                    inputPlaceholder: "0x heir address",
+                    confirmText: "Create Vault",
+                    confirmAction: (initialHeir) => createVaultFromFactory(savedFactory, initialHeir)
+                });
             };
 
             const openDepositModal = () => {
@@ -1275,54 +1813,102 @@
             };
 
             return (
-                <div className="min-h-screen bg-white dark:bg-brand-dark text-gray-900 dark:text-white font-sans transition-colors animate-fade-in flex flex-col">
-
-                    {/* Dashboard Navbar */}
-                    <div className="bg-white/80 dark:bg-brand-panel/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 px-6 py-4 sticky top-0 z-30 transition-all duration-300">
-                        <div className="max-w-7xl mx-auto flex justify-between items-center">
+                <div className="flex h-screen bg-gray-50 dark:bg-[#0B0E11] text-gray-900 dark:text-white font-sans overflow-hidden transition-colors animate-fade-in">
+                    
+                    {/* SIDEBAR (Trust Wallet style) */}
+                    <div className="w-64 bg-white dark:bg-[#15191F] border-r border-gray-200 dark:border-gray-800 flex flex-col justify-between shrink-0 hidden md:flex z-40">
+                        {/* Logo */}
+                        <div className="p-6">
                             <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setCurrentView('dashboard')}>
                                 <div className="relative">
                                     <div className="absolute inset-0 bg-brand-blue blur-lg opacity-20 group-hover:opacity-40 transition-opacity"></div>
                                     <img src="logo.png" alt="LegacyChain Logo" className="h-10 w-auto object-contain hexagon-clip relative z-10" />
                                 </div>
-                                <span className="text-xl font-black tracking-tight"><span className="text-gray-900 dark:text-white">Legacy</span><span className="brand-gradient">Chain</span> <span className="text-gray-400 font-bold text-[10px] ml-2 uppercase tracking-widest hidden md:inline">{currentView === 'profile' ? 'Profile' : 'Protocol'}</span></span>
+                                <span className="text-xl font-black tracking-tight"><span className="text-gray-900 dark:text-white">Legacy</span><span className="brand-gradient">Chain</span></span>
                             </div>
-                            <div className="flex items-center gap-2 md:gap-4">
-                                <div className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl border ${isTransferred ? 'bg-red-100 border-red-200 text-red-600' : 'bg-green-100 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400'}`}>
+                        </div>
+
+                        {/* Navigation Links */}
+                        <nav className="flex-1 px-4 space-y-2 mt-4 overflow-y-auto">
+                            {[
+                                { id: "dashboard", icon: <Activity width="20" height="20" />, label: currentLang === "tr" ? "Panel" : "Dashboard" },
+                                { id: "assets", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>, label: currentLang === "tr" ? "VarlÄ±klar" : "Assets" },
+                                { id: "privacy", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>, label: currentLang === "tr" ? "Gizlilik" : "Privacy" },
+                                { id: "oracle", icon: <Shield width="20" height="20" />, label: "Oracle" },
+                                { id: "history", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>, label: currentLang === "tr" ? "GeÃ§miÅŸ" : "History" },
+                                { id: "support", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>, label: currentLang === "tr" ? "Destek" : "Support" },
+                                { id: "profile", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>, label: currentLang === "tr" ? "Ayarlar" : "Settings" }
+                            ].map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setCurrentView(tab.id)}
+                                    className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-sm font-bold transition-all ${
+                                        currentView === tab.id
+                                            ? "bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue border border-brand-blue/20"
+                                            : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5 border border-transparent"
+                                    }`}
+                                >
+                                    <span className={currentView === tab.id ? "text-brand-blue" : "text-gray-400"}>{tab.icon}</span>
+                                    <span>{tab.label}</span>
+                                </button>
+                            ))}
+                        </nav>
+
+                        {/* Connection Status & Disconnect at bottom of Sidebar */}
+                        <div className="p-4 border-t border-gray-200 dark:border-gray-800">
+                            <div className="bg-gray-50 dark:bg-black/30 p-3 rounded-xl mb-3 flex items-center justify-between border border-gray-100 dark:border-gray-800">
+                                <div className="flex items-center gap-2">
                                     <div className={`w-2 h-2 rounded-full animate-pulse ${isTransferred ? 'bg-red-500' : 'bg-green-500'}`}></div>
-                                    <span className="text-[10px] font-black uppercase tracking-wider">{isTransferred ? translate('dashboard.protocol') : translate('dashboard.system')}</span>
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">{isTransferred ? translate('dashboard.protocol') : translate('dashboard.system')}</span>
                                 </div>
-                                <button onClick={toggleTheme} className="p-2.5 bg-gray-100 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all active:scale-90">
-                                    {darkMode ? <Sun width="18" height="18" /> : <Moon width="18" height="18" />}
-                                </button>
-                                <button onClick={switchLanguage} className="p-2.5 bg-gray-100 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition font-black text-[10px] active:scale-90">
-                                    {currentLang === 'en' ? 'TR' : 'EN'}
-                                </button>
-
-                                {/* Profile Button */}
-                                <button onClick={() => setCurrentView(currentView === 'profile' ? 'dashboard' : 'profile')} className={`p-2.5 rounded-xl transition-all flex items-center gap-2 active:scale-90 ${currentView === 'profile' ? 'bg-brand-blue text-white shadow-xl shadow-brand-blue/30' : 'bg-gray-100 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                                    <span className="text-xs font-black hidden md:block">Settings</span>
-                                </button>
-
-                                <div className="hidden md:flex items-center gap-2 bg-gray-100 dark:bg-black/30 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700/50">
-                                    <div className="w-5 h-5 rounded-full bg-gradient-to-r from-blue-400 to-purple-500 shadow-sm"></div>
-                                    <span className="text-xs font-mono font-black">{walletAddress.substring(0, 6)}...{walletAddress.substring(walletAddress.length - 4)}</span>
-                                </div>
-                                <button onClick={onDisconnect} className="p-2.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all text-gray-400 hover:text-red-500 active:scale-90"><LogOut width="20" height="20" /></button>
-
-                                <button className="p-2.5 bg-gray-100 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all active:scale-90 ml-1">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-                                </button>
                             </div>
+                            <button onClick={onDisconnect} className="w-full py-3 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 text-red-500 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2">
+                                <LogOut size={16}/> Disconnect
+                            </button>
                         </div>
                     </div>
 
-                    <div className="flex-1 max-w-7xl mx-auto w-full p-0">
+                    {/* MAIN CONTENT AREA */}
+                    <div className="flex-1 flex flex-col overflow-hidden relative bg-gray-50 dark:bg-[#0B0E11]">
+                        {/* TOP BAR */}
+                        <header className="h-20 bg-white/80 dark:bg-[#0B0E11]/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 flex items-center justify-between px-6 md:px-8 shrink-0 z-30">
+                            <div className="flex items-center gap-3 md:hidden cursor-pointer" onClick={() => setCurrentView('dashboard')}>
+                                <img src="logo.png" alt="LegacyChain Logo" className="h-8 w-auto object-contain" />
+                            </div>
+                            
+                            <h1 className="text-2xl font-black capitalize tracking-tight text-gray-900 dark:text-white hidden md:block">
+                                {currentView === 'dashboard' ? 'Overview' : currentView}
+                            </h1>
+                            
+                            <div className="flex items-center gap-3 ml-auto">
+                                <button onClick={switchLanguage} className="px-3 py-2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition font-black text-xs">
+                                    {currentLang === 'en' ? 'TR' : 'EN'}
+                                </button>
+                                <button onClick={toggleTheme} className="p-2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                                    {darkMode ? <Sun width="16" height="16" /> : <Moon width="16" height="16" />}
+                                </button>
+                                
+                                <div className="px-3 py-2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-lg text-[10px] font-black uppercase tracking-widest">
+                                    Browser alerts and email are managed in Profile
+                                </div>
+
+                                <div className="flex items-center gap-2 bg-white dark:bg-gray-800/50 px-4 py-2 rounded-full border border-gray-200 dark:border-gray-700 shadow-sm">
+                                    <div className="w-4 h-4 rounded-full bg-gradient-to-r from-blue-400 to-purple-500"></div>
+                                    <span className="text-xs font-mono font-black text-gray-700 dark:text-white">{walletAddress.substring(0, 6)}...{walletAddress.substring(walletAddress.length - 4)}</span>
+                                </div>
+                            </div>
+                        </header>
+
+                        {/* SCROLLABLE CONTENT */}
+                        <main className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 relative">
                         {currentView === 'profile' ? (
-                            <ProfileView walletAddress={walletAddress} translate={translate} setView={setCurrentView} />
+                            <ProfileView walletAddress={walletAddress} onDisconnect={onDisconnect} />
+                        ) : currentView === 'history' ? (
+                            <HistoryView translate={translate} />
+                        ) : currentView === 'support' ? (
+                            <SupportView translate={translate} />
                         ) : (
-                            <div className="p-6 md:p-8 space-y-8 animate-fade-in">
+                            <div className="space-y-8 animate-fade-in">
                                 {/* 1. HERO SECTION: LIVE TIMER - Redesigned for Premium Look */}
                                 <div className={`rounded-[3rem] p-12 text-white shadow-2xl relative overflow-hidden transition-all duration-1000 bg-slate-900 border border-white/10 cyber-grid animate-holographic`}>
                                     {/* Animated Mesh Gradients - Enhanced */}
@@ -1448,56 +2034,96 @@
                                                         <Shield className="text-brand-blue" width="24" height="24" />
                                                         {translate('dashboard.oracle_consensus')}
                                                     </h3>
-                                                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-1">Multi-Signature Verification Protocol</p>
+                                                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-1">Category-aware attestation consensus</p>
                                                 </div>
                                                 <div className="flex items-center gap-4">
                                                     <div className="text-right">
                                                         <div className="text-2xl font-mono font-black text-brand-blue">{oracleSignatures}/2</div>
                                                         <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{translate('dashboard.authorities_confirmed')}</div>
                                                     </div>
-                                                    {!isGracePeriod && oracleSignatures >= 2 ? (
+                                                    {!isGracePeriod && oracleConsensusReady ? (
                                                         <button onClick={handleStartGracePeriod} className="h-12 px-6 bg-brand-blue text-white rounded-2xl flex items-center justify-center font-black text-[11px] uppercase tracking-widest hover:bg-blue-600 transition-all shadow-glow active:scale-95 animate-pulse">
                                                             Start Grace Phase
                                                         </button>
                                                     ) : (
-                                                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border-2 transition-all duration-500 ${oracleSignatures >= 2 ? 'bg-brand-success/10 border-brand-success text-brand-success shadow-glow-success' : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400'}`}>
-                                                            {oracleSignatures >= 2 ? <CheckCircle width="24" height="24" strokeWidth={3} /> : <Shield width="24" height="24" strokeWidth={3} />}
+                                                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border-2 transition-all duration-500 ${oracleConsensusReady ? 'bg-brand-success/10 border-brand-success text-brand-success shadow-glow-success' : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400'}`}>
+                                                            {oracleConsensusReady ? <CheckCircle width="24" height="24" strokeWidth={3} /> : <Shield width="24" height="24" strokeWidth={3} />}
                                                         </div>
                                                     )}
                                                 </div>
                                             </div>
 
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                                <div className={`p-5 rounded-2xl border transition-all duration-500 ${oracleSignatures >= 1 ? 'glass-panel border-brand-success/30 shadow-lg' : 'bg-gray-50/50 dark:bg-black/20 border-gray-100 dark:border-gray-800'}`}>
+                                                <div className={`p-5 rounded-2xl border transition-all duration-500 ${oracleCategories.health ? 'glass-panel border-brand-success/30 shadow-lg' : 'bg-gray-50/50 dark:bg-black/20 border-gray-100 dark:border-gray-800'}`}>
                                                     <div className="flex items-center justify-between mb-2">
                                                         <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Authority 01</span>
-                                                        <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest ${oracleSignatures >= 1 ? 'text-brand-success' : 'text-gray-400'}`}>
-                                                            <div className={`w-2 h-2 rounded-full ${oracleSignatures >= 1 ? 'bg-brand-success animate-pulse' : 'bg-gray-400'}`}></div>
-                                                            {oracleSignatures >= 1 ? 'Confirmed' : 'Pending'}
+                                                        <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest ${oracleCategories.health ? 'text-brand-success' : 'text-gray-400'}`}>
+                                                            <div className={`w-2 h-2 rounded-full ${oracleCategories.health ? 'bg-brand-success animate-pulse' : 'bg-gray-400'}`}></div>
+                                                            {oracleCategories.health ? 'Confirmed' : 'Pending'}
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-3">
-                                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${oracleSignatures >= 1 ? 'bg-brand-success/10 text-brand-success' : 'bg-gray-100 dark:bg-gray-800'}`}>
+                                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${oracleCategories.health ? 'bg-brand-success/10 text-brand-success' : 'bg-gray-100 dark:bg-gray-800'}`}>
                                                             <Building width="20" height="20" />
                                                         </div>
-                                                        <div className="font-bold text-sm dark:text-white truncate">Ministry of Health API</div>
+                                                        <div className="font-bold text-sm dark:text-white truncate">Medical Authority</div>
                                                     </div>
                                                 </div>
-                                                <div className={`p-5 rounded-2xl border transition-all duration-500 ${oracleSignatures >= 2 ? 'glass-panel border-brand-success/30 shadow-lg' : 'bg-gray-50/50 dark:bg-black/20 border-gray-100 dark:border-gray-800'}`}>
+                                                <div className={`p-5 rounded-2xl border transition-all duration-500 ${oracleCategories.government ? 'glass-panel border-brand-success/30 shadow-lg' : 'bg-gray-50/50 dark:bg-black/20 border-gray-100 dark:border-gray-800'}`}>
                                                     <div className="flex items-center justify-between mb-2">
                                                         <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Authority 02</span>
-                                                        <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest ${oracleSignatures >= 2 ? 'text-brand-success' : 'text-gray-400'}`}>
-                                                            <div className={`w-2 h-2 rounded-full ${oracleSignatures >= 2 ? 'bg-brand-success animate-pulse' : 'bg-gray-400'}`}></div>
-                                                            {oracleSignatures >= 2 ? 'Confirmed' : 'Pending'}
+                                                        <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest ${oracleCategories.government ? 'text-brand-success' : 'text-gray-400'}`}>
+                                                            <div className={`w-2 h-2 rounded-full ${oracleCategories.government ? 'bg-brand-success animate-pulse' : 'bg-gray-400'}`}></div>
+                                                            {oracleCategories.government ? 'Confirmed' : 'Pending'}
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-3">
-                                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${oracleSignatures >= 2 ? 'bg-brand-success/10 text-brand-success' : 'bg-gray-100 dark:bg-gray-800'}`}>
+                                                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${oracleCategories.government ? 'bg-brand-success/10 text-brand-success' : 'bg-gray-100 dark:bg-gray-800'}`}>
                                                             <Shield width="20" height="20" />
                                                         </div>
-                                                        <div className="font-bold text-sm dark:text-white truncate">Central Census Bureau</div>
+                                                        <div className="font-bold text-sm dark:text-white truncate">Civil Registry</div>
                                                     </div>
                                                 </div>
+                                            </div>
+
+                                            <div className="mt-4 p-5 rounded-2xl border bg-gray-50/70 dark:bg-black/20 border-gray-100 dark:border-gray-800">
+                                                <div className="flex items-center justify-between gap-4 mb-3">
+                                                    <div>
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">Current Oracle Case</div>
+                                                        <div className="text-lg font-black text-gray-900 dark:text-white">{oracleCase.status}</div>
+                                                    </div>
+                                                    <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${oracleCase.status === "ATTESTED" || oracleCase.status === "GRACE_ACTIVE" ? 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-300 border border-yellow-500/20' : oracleCase.status === "CASE_OPEN" ? 'bg-blue-500/10 text-brand-blue border border-blue-500/20' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}`}>
+                                                        {oracleCase.source}
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                                    <div className="p-3 rounded-xl bg-white dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Case ID</div>
+                                                        <div className="font-mono text-gray-700 dark:text-gray-200 break-all">{oracleCase.caseId ? `${oracleCase.caseId.slice(0, 10)}...${oracleCase.caseId.slice(-8)}` : "Not opened yet"}</div>
+                                                    </div>
+                                                    <div className="p-3 rounded-xl bg-white dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Opened</div>
+                                                        <div className="font-bold text-gray-700 dark:text-gray-200">{oracleCase.openedAt ? new Date(oracleCase.openedAt).toLocaleString() : "No active case"}</div>
+                                                    </div>
+                                                </div>
+                                                {oracleCase.caseId && oracleCase.status !== "DISPUTED" && oracleCase.status !== "CANCELED" && (
+                                                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                                                        <button
+                                                            onClick={handleOpenDispute}
+                                                            className="px-4 py-2 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/20 transition-all"
+                                                        >
+                                                            Open Dispute Review
+                                                        </button>
+                                                        <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                                                            Owner recovery remains the strongest cancel path.
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                {oracleCase.status === "DISPUTED" && (
+                                                    <div className="mt-4 p-3 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[11px] font-bold">
+                                                        Dispute is active. Claims should remain paused until owner activity or review closes the case.
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -1515,7 +2141,7 @@
                                                 </div>
                                             </div>
                                             <p className="text-xs text-gray-500 font-bold mt-6 leading-relaxed bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-gray-100 dark:border-white/5">
-                                                System is tracking <span className="text-indigo-500">on-chain entropy</span> from your wallet. Automated reset protocols are engaged.
+                                                Owner activity can reset false death signals through the on-chain record activity flow.
                                             </p>
                                         </div>
                                         <div className="mt-8 relative z-10">
@@ -1524,7 +2150,7 @@
                                                     <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping"></div>
                                                     Tracking Active
                                                 </span>
-                                                <span className="text-[10px] font-mono font-bold text-gray-400">PASSIVE_MODE: ON</span>
+                                            <span className="text-[10px] font-mono font-bold text-gray-400">OWNER_ACTIVITY: TRACKED</span>
                                             </div>
                                             <div className="h-3 bg-gray-100 dark:bg-black/30 rounded-full overflow-hidden p-0.5 border border-gray-200 dark:border-white/5">
                                                 <div className="h-full bg-gradient-to-r from-indigo-500 to-brand-blue w-full animate-progress-glow rounded-full shadow-glow"></div>
@@ -1539,19 +2165,91 @@
                                         <div className="flex justify-between items-end">
                                             <div>
                                                 <h3 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">{translate('dashboard.oracles_title')}</h3>
-                                                <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-1">Live Multi-Factor Verification</p>
+                                                <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-1">Authority attestations recorded on-chain</p>
                                             </div>
                                             <span className="hidden sm:flex px-4 py-1.5 bg-green-500/10 text-green-600 dark:text-green-400 rounded-full text-[10px] font-black border border-green-500/20 items-center gap-2 uppercase tracking-widest">
                                                 <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Network Healthy
                                             </span>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                            <OracleCard title="Citizen Registry" source="GOV.TR API" icon={<Building width="18" height="18" />} status="VERIFIED" lastSync="12s ago" />
-                                            <OracleCard title="Apple HealthKit" source="BIOMETRIC" icon={<Heart width="18" height="18" />} status={`${heartRate} BPM`} lastSync="Live" isPulse={true} />
-                                            <OracleCard title="Social Activity" source="X / TWITTER" icon={<Twitter width="18" height="18" />} status="ACTIVE" lastSync="42m ago" />
+                                            <OracleCard title="Civil Registry Authority" source="GOVERNMENT" icon={<Building width="18" height="18" />} status={oracleCategories.government ? "ATTESTED" : "READY"} lastSync={oracleCategories.government ? "On-chain" : "Waiting"} />
+                                            <OracleCard title="Medical Institution" source="HEALTH_AUTHORITY" icon={<Heart width="18" height="18" />} status={oracleCategories.health ? "ATTESTED" : "READY"} lastSync={oracleCategories.health ? "On-chain" : "Waiting"} />
+                                            <OracleCard title="Legal Representative" source="LEGAL_FAMILY" icon={<Users width="18" height="18" />} status={oracleCategories.legal ? "ATTESTED" : "READY"} lastSync={oracleCategories.legal ? "On-chain" : "Waiting"} />
                                         </div>
 
-                                        {/* AI HEALTH MONITOR - Redesigned */}
+                                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                                            <div className="bg-white dark:bg-brand-panel p-6 rounded-[1.75rem] border border-gray-200 dark:border-gray-800 shadow-lg">
+                                                <div className="flex items-center justify-between mb-5">
+                                                    <div>
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">Authority Health</div>
+                                                        <div className="text-lg font-black text-gray-900 dark:text-white">Signed Relay Network</div>
+                                                    </div>
+                                                    <div className="w-10 h-10 rounded-2xl bg-brand-blue/10 text-brand-blue flex items-center justify-center">
+                                                        <Users width="20" height="20" />
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-3 mb-5">
+                                                    <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Authorities</div>
+                                                        <div className="text-xl font-black dark:text-white">{oracleSystemStatus.authorities.length}</div>
+                                                    </div>
+                                                    <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Roles</div>
+                                                        <div className="text-xl font-black dark:text-white">{oracleSystemStatus.configuredAuthorityRoles.length}</div>
+                                                    </div>
+                                                    <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Alerts</div>
+                                                        <div className="text-xl font-black dark:text-white">{oracleSystemStatus.notificationSubscribers}</div>
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    {oracleSystemStatus.authorities.length > 0 ? oracleSystemStatus.authorities.slice(0, 4).map((authority) => (
+                                                        <div key={authority.address || authority.role} className="flex items-center justify-between gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                            <div className="min-w-0">
+                                                                <div className="text-sm font-black text-gray-900 dark:text-white truncate">{authority.name}</div>
+                                                                <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">{authority.role}</div>
+                                                            </div>
+                                                            <div className="text-[10px] font-mono text-gray-500">{authority.address ? `${authority.address.slice(0, 6)}...${authority.address.slice(-4)}` : "n/a"}</div>
+                                                        </div>
+                                                    )) : (
+                                                        <div className="text-xs text-gray-500 font-bold">No authority telemetry loaded yet.</div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-white dark:bg-brand-panel p-6 rounded-[1.75rem] border border-gray-200 dark:border-gray-800 shadow-lg">
+                                                <div className="flex items-center justify-between mb-5">
+                                                    <div>
+                                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">Recent Attestations</div>
+                                                        <div className="text-lg font-black text-gray-900 dark:text-white">Case Timeline</div>
+                                                    </div>
+                                                    <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center">
+                                                        <FileText width="20" height="20" />
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    {oracleLog.slice(0, 5).map((entry, index) => (
+                                                        <div key={`${entry.time}-${entry.source}-${index}`} className="flex items-start gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
+                                                            <div className={`mt-1 w-2.5 h-2.5 rounded-full ${entry.status === "DISPUTED" ? 'bg-amber-500' : entry.status === "GRACE_ACTIVE" || entry.status === "ATTESTED" ? 'bg-green-500' : 'bg-brand-blue'}`}></div>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex items-center justify-between gap-3">
+                                                                    <div className="text-sm font-black text-gray-900 dark:text-white truncate">{entry.source}</div>
+                                                                    <div className="text-[10px] font-mono text-gray-500">{entry.time}</div>
+                                                                </div>
+                                                                <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">{entry.event}</div>
+                                                                <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-2">{entry.status}</div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="mt-5 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                                    <span>Relay Mode: EIP-712</span>
+                                                    <span>Total Cases: {oracleSystemStatus.totalCases}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* PROOF-OF-LIFE RISK ENGINE */}
                                         <div className="bg-gradient-to-br from-brand-blue via-indigo-700 to-purple-800 p-8 rounded-[2rem] shadow-2xl relative overflow-hidden group">
                                             <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
                                             <div className="relative z-10">
@@ -1561,30 +2259,30 @@
                                                             <Activity className="text-white" width="32" height="32" strokeWidth={2.5} />
                                                         </div>
                                                         <div>
-                                                            <div className="text-white/60 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Crystalline AI Engine</div>
-                                                            <div className="text-white text-2xl font-black tracking-tight">Health Prediction Analysis</div>
+                                                            <div className="text-white/60 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Proof-of-Life Risk Engine</div>
+                                                            <div className="text-white text-2xl font-black tracking-tight">Vault Risk Analysis</div>
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-6 bg-black/20 p-4 rounded-2xl backdrop-blur-sm border border-white/10">
                                                         <div className="text-right">
-                                                            <div className={`text-4xl font-mono font-black ${aiHealthScore >= 85 ? 'text-green-300' : 'text-yellow-300'}`}>
-                                                                {aiHealthScore}%
+                                                            <div className={`text-4xl font-mono font-black ${riskEngine.safetyScore >= 75 ? 'text-green-300' : riskEngine.safetyScore >= 50 ? 'text-yellow-300' : 'text-red-300'}`}>
+                                                                {riskEngine.safetyScore}%
                                                             </div>
-                                                            <div className="text-[10px] font-black text-white/40 uppercase tracking-widest">Confidence</div>
+                                                            <div className="text-[10px] font-black text-white/40 uppercase tracking-widest">Safety Score</div>
                                                         </div>
                                                         <div className="w-px h-10 bg-white/10"></div>
-                                                        <div className={`text-sm font-black px-4 py-2 rounded-xl shadow-lg ${aiPrediction === "LOW RISK" ? 'bg-green-500 text-white' : 'bg-yellow-500 text-white'}`}>
-                                                            {aiPrediction}
+                                                        <div className={`text-sm font-black px-4 py-2 rounded-xl shadow-lg ${riskEngine.status === "LOW" ? 'bg-green-500 text-white' : riskEngine.status === "WATCH" ? 'bg-yellow-500 text-white' : 'bg-red-500 text-white'}`}>
+                                                            {riskEngine.status}
                                                         </div>
                                                     </div>
                                                 </div>
                                                 <div className="mt-8">
-                                                    <div className="flex justify-between text-[10px] font-black text-white/60 uppercase tracking-widest mb-2">
-                                                        <span>Neural Network Stability</span>
-                                                        <span>Processing...</span>
+                                                    <div className="flex flex-col sm:flex-row sm:justify-between gap-2 text-[10px] font-black text-white/60 uppercase tracking-widest mb-2">
+                                                        <span className="max-w-full sm:max-w-[45%] leading-relaxed">{riskEngine.explanation}</span>
+                                                        <span className="max-w-full sm:max-w-[45%] sm:text-right leading-relaxed">{riskEngine.action}</span>
                                                     </div>
                                                     <div className="h-3 bg-black/30 rounded-full p-0.5 border border-white/5 overflow-hidden">
-                                                        <div className={`h-full rounded-full bg-gradient-to-r from-blue-400 to-green-400 transition-all duration-1000 shadow-[0_0_15px_rgba(74,222,128,0.5)]`} style={{ width: `${aiHealthScore}%` }}></div>
+                                                        <div className={`h-full rounded-full bg-gradient-to-r from-blue-400 to-green-400 transition-all duration-1000 shadow-[0_0_15px_rgba(74,222,128,0.5)]`} style={{ width: `${riskEngine.safetyScore}%` }}></div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1600,7 +2298,7 @@
                                             <div className="absolute top-4 right-4 text-brand-blue/20 group-hover:text-brand-blue/40 transition-colors"><Wallet width="32" height="32" /></div>
                                             <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4">{translate('dashboard.total_value')}</h3>
                                             <div className="text-4xl font-mono font-black text-gray-900 dark:text-white mb-2">{balance} <span className="text-lg text-gray-400 font-bold">ETH</span></div>
-                                            <div className="text-sm font-bold text-gray-500 mb-8">{balance === "0.00" ? "$0.00 USD" : `≈ $${(parseFloat(balance) * ethPrice).toLocaleString()} USD`}</div>
+                                            <div className="text-sm font-bold text-gray-500 mb-8">{balance === "0.00" ? "$0.00 USD" : `â‰ˆ $${(parseFloat(balance) * ethPrice).toLocaleString()} USD`}</div>
 
                                             <div className="space-y-4">
                                                 <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-gray-400">
@@ -1622,14 +2320,14 @@
                                                 <div className="bg-brand-blue/10 text-brand-blue text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-tighter">Secured</div>
                                             </div>
                                             <div className="flex items-center gap-5 mb-8">
-                                                <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-lg flex items-center justify-center text-2xl">👤</div>
+                                                <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-lg flex items-center justify-center text-2xl">ğŸ‘¤</div>
                                                 <div className="overflow-hidden">
                                                     <div className="text-lg font-black text-gray-900 dark:text-white">Primary Beneficiary</div>
-                                                    <div className="text-xs font-mono text-gray-500 truncate w-40">{beneficiaryAddress}</div>
+                                                    <div className="text-xs font-mono text-gray-500 truncate w-40">{primaryHeir ? primaryHeir.fullWallet : "No active heir configured"}</div>
                                                 </div>
                                             </div>
-                                            <button onClick={openChangeBeneficiaryModal} className="w-full py-4 bg-gray-50 dark:bg-black/20 border border-gray-200 dark:border-gray-800 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white hover:border-brand-blue transition-all active:scale-95 shadow-sm">
-                                                Modify Heir Protocol
+                                            <button onClick={handleInitiatePrimaryHeirUpdate} className="w-full py-4 bg-gray-50 dark:bg-black/20 border border-gray-200 dark:border-gray-800 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white hover:border-brand-blue transition-all active:scale-95 shadow-sm">
+                                                Queue Heir Update
                                             </button>
                                         </div>
 
@@ -1651,7 +2349,7 @@
                                                 <div className="flex items-center justify-between p-5 bg-gray-50 dark:bg-black/40 rounded-3xl border border-gray-100 dark:border-white/5 hover:border-brand-blue/40 transition-all group/asset cursor-pointer">
                                                     <div className="flex items-center gap-5">
                                                         <div className="w-12 h-12 bg-blue-500/10 text-blue-500 rounded-2xl flex items-center justify-center font-black text-lg border border-blue-500/20 group-hover/asset:rotate-12 transition-transform">
-                                                            Ξ
+                                                            Î
                                                         </div>
                                                         <div>
                                                             <div className="font-black text-sm dark:text-white">Ethereum</div>
@@ -1675,30 +2373,30 @@
                                                         </div>
                                                     </div>
                                                     <div className="text-right">
-                                                        <div className="font-mono font-black text-lg dark:text-white tabular-nums">1,250.00</div>
-                                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-brand-success">USDT LOCKED</div>
+                                                        <div className="font-mono font-black text-lg dark:text-white tabular-nums">{heirs.filter((heir) => heir.isActive !== false).length}</div>
+                                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-brand-success">ACTIVE HEIRS</div>
                                                     </div>
                                                 </div>
 
                                                 <div className="flex items-center justify-between p-5 bg-gray-50 dark:bg-black/40 rounded-3xl border border-gray-100 dark:border-white/5 hover:border-brand-accent/40 transition-all group/asset cursor-pointer">
                                                     <div className="flex items-center gap-5">
                                                         <div className="w-12 h-12 bg-brand-accent/10 text-brand-accent rounded-2xl flex items-center justify-center text-2xl border border-brand-accent/20 group-hover/asset:rotate-12 transition-transform">
-                                                            🖼️
+                                                            ğŸ–¼ï¸
                                                         </div>
                                                         <div>
-                                                            <div className="font-black text-sm dark:text-white">NFT Collection</div>
-                                                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Rare Assets</div>
+                                                            <div className="font-black text-sm dark:text-white">Oracle Consensus</div>
+                                                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Signals and grace state</div>
                                                         </div>
                                                     </div>
                                                     <div className="text-right">
-                                                        <div className="font-mono font-black text-lg dark:text-white tabular-nums">3</div>
-                                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-brand-accent">TOTAL ITEMS</div>
+                                                        <div className="font-mono font-black text-lg dark:text-white tabular-nums">{oracleSignatures}</div>
+                                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-brand-accent">{isGracePeriod ? 'GRACE ACTIVE' : 'SIGNALS'}</div>
                                                     </div>
                                                 </div>
                                             </div>
 
-                                            <button className="w-full mt-10 py-5 bg-slate-900 text-white hover:bg-brand-blue transition-all rounded-[1.5rem] text-[11px] font-black uppercase tracking-[0.2em] shadow-lg active:scale-95">
-                                                Initialize Asset Rebalance
+                                            <button onClick={() => setShowHeirPanel((prev) => !prev)} className="w-full mt-10 py-5 bg-slate-900 text-white hover:bg-brand-blue transition-all rounded-[1.5rem] text-[11px] font-black uppercase tracking-[0.2em] shadow-lg active:scale-95">
+                                                {showHeirPanel ? 'Hide Heir Panel' : 'Open Heir Panel'}
                                             </button>
                                         </div>
                                     </div>
@@ -1710,7 +2408,14 @@
                                         <div className="w-2 h-8 bg-brand-blue rounded-full"></div>
                                         {translate('dashboard.quick_actions')}
                                     </h3>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+                                        <QuickActionButton
+                                            icon={<Wallet width="24" height="24" strokeWidth={2.5} />}
+                                            title="Create Vault"
+                                            desc="Factory deploy"
+                                            onClick={openVaultWizard}
+                                            variant="primary"
+                                        />
                                         <QuickActionButton
                                             icon={<Activity width="24" height="24" strokeWidth={2.5} />}
                                             title={translate('dashboard.ping_btn')}
@@ -1770,7 +2475,7 @@
                                         <h3 className="font-black text-gray-900 dark:text-white flex items-center gap-3">
                                             <History width="20" height="20" className="text-brand-blue" /> Transaction Ledger
                                         </h3>
-                                        <button className="text-[10px] font-black text-brand-blue uppercase tracking-widest hover:underline">Export CSV</button>
+                                        <button onClick={handleExportCsv} className="text-[10px] font-black text-brand-blue uppercase tracking-widest hover:underline">Export CSV</button>
                                     </div>
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-sm text-left">
@@ -1808,6 +2513,30 @@
                                 </div>
                             </div>
                         )}
+                        </main>
+                        
+                        {/* MOBILE BOTTOM NAV */}
+                        <div className="md:hidden bg-white dark:bg-[#15191F] border-t border-gray-200 dark:border-gray-800 flex items-center justify-around p-2 pb-safe z-40">
+                            {[
+                                { id: "dashboard", icon: <Activity width="20" height="20" /> },
+                                { id: "assets", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> },
+                                { id: "history", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> },
+                                { id: "support", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> },
+                                { id: "profile", icon: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg> }
+                            ].map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setCurrentView(tab.id)}
+                                    className={`p-3 rounded-xl transition-all ${
+                                        currentView === tab.id
+                                            ? "text-brand-blue bg-brand-blue/10"
+                                            : "text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                                    }`}
+                                >
+                                    {tab.icon}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
             );
@@ -1840,7 +2569,6 @@
             const [isConnecting, setIsConnecting] = useState(false);
             const [walletAddress, setWalletAddress] = useState("");
             const [darkMode, setDarkMode] = useState(false);
-            const [beneficiaryAddress, setBeneficiaryAddress] = useState("0xAb58...3C9B");
             const [modal, setModal] = useState({ isOpen: false, title: '', content: '', needsInput: false, confirmAction: null });
             const [modalInputValue, setModalInputValue] = useState("");
 
@@ -1914,12 +2642,11 @@
             const toggleTheme = () => setDarkMode(!darkMode);
 
             const openModal = (title, content) => { setModal({ isOpen: true, title, content, needsInput: false, confirmAction: null }); setModalInputValue(""); };
-            const openChangeBeneficiaryModal = () => { setModalInputValue(""); setModal({ isOpen: true, title: "Change Beneficiary", content: "Enter new Ethereum address (0x...):", needsInput: true, confirmAction: (val) => { if (val && val.trim().length > 0 && val.startsWith("0x")) { setBeneficiaryAddress(val); closeModal(); openModal("Success", "Beneficiary address updated!"); } else { openModal("Error", "Invalid address. Must start with 0x."); } } }); };
             const closeModal = () => setModal({ ...modal, isOpen: false });
 
             const connectWallet = async () => {
                 if (!window.ethereum) {
-                    openModal("MetaMask Missing", "Lütfen MetaMask eklentisini tarayıcınıza yükleyin!");
+                    openModal("MetaMask Missing", "LÃ¼tfen MetaMask eklentisini tarayÄ±cÄ±nÄ±za yÃ¼kleyin!");
                     return;
                 }
 
@@ -1971,8 +2698,6 @@
                             walletAddress={walletAddress}
                             onDisconnect={disconnect}
                             openModal={openModal}
-                            beneficiaryAddress={beneficiaryAddress}
-                            openChangeBeneficiaryModal={openChangeBeneficiaryModal}
                             signer={signer}
                             toggleTheme={toggleTheme}
                             darkMode={darkMode}
@@ -2032,14 +2757,14 @@
                             </p>
                             <div className="flex flex-col sm:flex-row gap-5 justify-center lg:justify-start pt-4">
                                 <button onClick={connectWallet} className="bg-brand-blue text-white px-10 py-4 rounded-full font-bold text-lg hover:bg-blue-700 transition shadow-2xl hover:-translate-y-1 transform active:scale-95">{translate('hero.start')}</button>
-                                <button onClick={() => openModal("Demo", "Demo video playing...")} className="px-8 py-4 rounded-full font-bold text-lg text-gray-700 dark:text-white bg-gray-100 dark:bg-brand-panel hover:bg-gray-200 dark:hover:bg-gray-800 transition flex items-center justify-center gap-2">
+                                <button onClick={connectWallet} className="px-8 py-4 rounded-full font-bold text-lg text-gray-700 dark:text-white bg-gray-100 dark:bg-brand-panel hover:bg-gray-200 dark:hover:bg-gray-800 transition flex items-center justify-center gap-2">
                                     <div className="w-8 h-8 bg-brand-blue text-white rounded-full flex items-center justify-center scale-90"><ArrowRight width="18" height="18" /></div>
                                     {translate('hero.view_demo')}
                                 </button>
                             </div>
                             <div className="pt-8 flex flex-wrap items-center justify-center lg:justify-start gap-10 border-t border-gray-100 dark:border-gray-800 mt-8">
                                 <div><p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase mb-1 tracking-widest">{translate('hero.users')}</p><p className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">10k+</p></div>
-                                <div><p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase mb-1 tracking-widest">{translate('hero.audited')}</p><p className="text-2xl font-black text-brand-blue tracking-tight">CERTIK</p></div>
+                                <div><p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase mb-1 tracking-widest">{translate('hero.audited')}</p><p className="text-2xl font-black text-brand-blue tracking-tight">98 TESTS</p></div>
                                 <div><p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase mb-1 tracking-widest">{translate('hero.status')}</p><div className="flex items-center gap-2"><div className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div><p className="text-2xl font-black text-green-600 tracking-tight">{translate('hero.online')}</p></div></div>
                             </div>
                         </div>
@@ -2117,11 +2842,11 @@
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
                                 {[1, 2, 3].map(id => (
                                     <div key={id} className="relative z-10 bg-white dark:bg-brand-panel p-8 rounded-[2rem] border border-gray-100 dark:border-gray-700 shadow-xl group hover:border-brand-blue transition-all">
-                                        <div className="text-5xl mb-6 group-hover:scale-110 transition-transform">{id === 1 ? "🛰️" : id === 2 ? "⏳" : "🔗"}</div>
+                                        <div className="text-5xl mb-6 group-hover:scale-110 transition-transform">{id === 1 ? "ğŸ›°ï¸" : id === 2 ? "â³" : "ğŸ”—"}</div>
                                         <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">{translate(`architecture.step${id}_title`)}</h3>
                                         <p className="text-gray-600 dark:text-gray-400 leading-relaxed text-sm font-light">{translate(`architecture.step${id}_desc`)}</p>
 
-                                        {id < 3 && <div className="hidden md:block absolute top-1/2 -right-4 translate-x-1/2 -translate-y-1/2 text-gray-200 dark:text-gray-700 font-black text-3xl">→</div>}
+                                        {id < 3 && <div className="hidden md:block absolute top-1/2 -right-4 translate-x-1/2 -translate-y-1/2 text-gray-200 dark:text-gray-700 font-black text-3xl">â†’</div>}
                                     </div>
                                 ))}
                             </div>
@@ -2318,7 +3043,7 @@
                                             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{translate('audit.report_title')}</div>
                                         </div>
                                         <div className="p-4 bg-white dark:bg-brand-dark rounded-xl border border-blue-500/20 flex flex-col items-center text-center group hover:shadow-lg transition">
-                                            <div className="text-brand-blue dark:text-blue-400 font-black text-xl mb-1">98/100</div>
+                                            <div className="text-brand-blue dark:text-blue-400 font-black text-xl mb-1">98 TESTS</div>
                                             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{translate('audit.report_score')}</div>
                                         </div>
                                     </div>
@@ -2386,13 +3111,13 @@
                             <div>
                                 <h6 className="font-bold text-gray-900 dark:text-white uppercase text-xs tracking-widest mb-6">Join Community</h6>
                                 <div className="flex gap-4">
-                                    <div className="w-10 h-10 bg-gray-100 dark:bg-brand-panel rounded-full flex items-center justify-center hover:bg-brand-blue hover:text-white transition cursor-pointer text-gray-600 dark:text-gray-300"><Twitter width="20" height="20" /></div>
                                     <div className="w-10 h-10 bg-gray-100 dark:bg-brand-panel rounded-full flex items-center justify-center hover:bg-brand-blue hover:text-white transition cursor-pointer text-gray-600 dark:text-gray-300"><Globe width="20" height="20" /></div>
+                                    <div className="w-10 h-10 bg-gray-100 dark:bg-brand-panel rounded-full flex items-center justify-center hover:bg-brand-blue hover:text-white transition cursor-pointer text-gray-600 dark:text-gray-300"><FileText width="20" height="20" /></div>
                                 </div>
                             </div>
                         </div>
                         <div className="max-w-7xl mx-auto px-6 mt-16 pt-8 border-t border-gray-100 dark:border-gray-800 text-center text-gray-400 text-xs font-bold uppercase tracking-widest">
-                            © 2024 LegacyChain Protocol. All Rights Reserved.
+                            Â© 2024 LegacyChain Protocol. All Rights Reserved.
                         </div>
                     </footer>
                 </div>
@@ -2406,3 +3131,4 @@
 
 </html>
 ```
+

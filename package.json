@@ -1,11 +1,25 @@
 {
   "name": "legacychain",
   "version": "1.0.0",
+  "scripts": {
+    "test": "hardhat test",
+    "frontend": "node scripts/serve-demo.js",
+    "backend": "node oracle-backend/server.js",
+    "deploy:full": "hardhat run scripts/deploy-full.js --network localhost"
+  },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
     "@types/node": "^22.19.3",
     "chai": "^4.5.0",
     "hardhat": "^2.22.17",
     "typescript": "~5.8.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.6.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "nodemailer": "^8.0.7"
   }
 }

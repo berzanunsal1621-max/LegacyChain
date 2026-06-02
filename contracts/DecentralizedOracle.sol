@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 /**
  * @title DecentralizedOracle - LegacyChain Consensus Oracle
@@ -8,6 +8,7 @@ pragma solidity ^0.8.0;
  */
 contract DecentralizedOracle {
     address public owner;
+    address public inheritanceContract;
     
     // Authorities who can sign death signals (e.g., Hospital, Government, Relative)
     mapping(address => bool) public isAuthority;
@@ -40,6 +41,14 @@ contract DecentralizedOracle {
     }
     
     /**
+     * @notice Miras kontratı adresini kaydet (sadece bu adres resetSignals çağırabilir)
+     */
+    function setInheritanceContract(address _contract) external onlyOwner {
+        require(_contract != address(0), "Invalid address");
+        inheritanceContract = _contract;
+    }
+    
+    /**
      * @notice Add a new authorized oracle node
      */
     function addAuthority(address _authority) external onlyOwner {
@@ -49,6 +58,27 @@ contract DecentralizedOracle {
         isAuthority[_authority] = true;
         authorities.push(_authority);
         emit AuthorityAdded(_authority);
+    }
+    
+    /**
+     * @notice Remove an existing authority
+     * @param _authority Address to remove
+     */
+    function removeAuthority(address _authority) external onlyOwner {
+        require(isAuthority[_authority], "Not an authority");
+        
+        isAuthority[_authority] = false;
+        
+        // Diziden çıkar (swap-and-pop)
+        for (uint256 i = 0; i < authorities.length; i++) {
+            if (authorities[i] == _authority) {
+                authorities[i] = authorities[authorities.length - 1];
+                authorities.pop();
+                break;
+            }
+        }
+        
+        emit AuthorityRemoved(_authority);
     }
     
     /**
@@ -77,10 +107,10 @@ contract DecentralizedOracle {
     
     /**
      * @notice Reset signals for a user (if they prove to be alive during Grace Period)
-     * @dev This would be called by the main contract if a pulse is detected
+     * @dev Only the registered inheritance contract can call this
      */
     function resetSignals(address _user) external {
-        // In a real scenario, this would have strict access control (e.g., from the Inheritance contract)
+        require(msg.sender == inheritanceContract || msg.sender == owner, "Only inheritance contract or owner can reset");
         signalCount[_user] = 0;
         for (uint256 i = 0; i < authorities.length; i++) {
             deathSignals[_user][authorities[i]] = false;
