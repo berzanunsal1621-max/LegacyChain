@@ -176,14 +176,12 @@ describe("LegacyChain: Specific Assets Module Tests", function () {
             ).to.be.revertedWith("Sure dolmadi veya Oracle onayi yok");
         });
 
-        it("Should allow anyone to trigger claim but transfer to designated heir", async function () {
+        it("Should NOT allow non-heir to trigger claimSpecificAsset", async function () {
             await triggerDeathAndWaitGrace();
 
-            const heirBalanceBefore = await token.balanceOf(heir2.address);
-            await contract.connect(nonHeir).claimSpecificAsset(0);
-            const heirBalanceAfter = await token.balanceOf(heir2.address);
-
-            expect(heirBalanceAfter - heirBalanceBefore).to.equal(amount);
+            await expect(
+                contract.connect(nonHeir).claimSpecificAsset(0)
+            ).to.be.revertedWith("Sadece atanmis varis talep edebilir");
         });
 
         it("Should revert on double claiming", async function () {

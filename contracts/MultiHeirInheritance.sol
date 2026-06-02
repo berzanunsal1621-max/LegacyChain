@@ -123,6 +123,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
     // Trusted signers for emergency (owner + oracle + heir0)
     address[] public trustedSigners;
     uint256 public constant REQUIRED_SIGNATURES = 2;
+    uint256 public emergencyNonce;
     
     // Pull-over-Push pattern: Varisler kendi paylarını çeker
     mapping(address => uint256) public pendingWithdrawals;
@@ -174,7 +175,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
     }
     
     modifier onlyOracle() {
-        require(msg.sender == oracle || msg.sender == owner, "Yetkisiz Oracle");
+        require(msg.sender == oracle, "Sadece Oracle bu islemi yapabilir");
         _;
     }
     
@@ -675,6 +676,7 @@ contract MultiHeirInheritance is ReentrancyGuard {
         SpecificAsset storage willRecord = specificWills[_index];
         require(!willRecord.isClaimed, "Zaten talep edildi");
         require(willRecord.designatedHeir != address(0), "Atanmis varis yok veya iptal edildi");
+        require(msg.sender == willRecord.designatedHeir, "Sadece atanmis varis talep edebilir");
         
         willRecord.isClaimed = true;
         
@@ -751,7 +753,8 @@ contract MultiHeirInheritance is ReentrancyGuard {
         
         pendingTokenWithdrawals[_tokenAddress][msg.sender] = 0;
         
-        IERC20(_tokenAddress).transfer(msg.sender, amount);
+        bool success = IERC20(_tokenAddress).transfer(msg.sender, amount);
+        require(success, "Token transfer basarisiz");
         
         emit TokenShareWithdrawn(_tokenAddress, msg.sender, amount);
     }
@@ -877,7 +880,8 @@ contract MultiHeirInheritance is ReentrancyGuard {
      * @param _amount Transfer miktarı
      */
     function emergencyMultiSigTransfer(address _to, uint256 _amount) external onlyTrustedSigner nonReentrant {
-        bytes32 actionHash = keccak256(abi.encodePacked(_to, _amount, block.number / 100));
+        bytes32 actionHash = keccak256(abi.encodePacked(_to, _amount, emergencyNonce));
+        emergencyNonce++;
         require(emergencyApprovals[actionHash] >= REQUIRED_SIGNATURES, "Yetersiz onay");
         require(address(this).balance >= _amount, "Yetersiz bakiye");
         

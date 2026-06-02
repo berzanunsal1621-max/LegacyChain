@@ -46,11 +46,10 @@ describe("LegacyChain: Multi-Sig & Emergency Module Tests", function () {
 
         beforeEach(async function () {
             // Generate action hash for transfer
-            const currentBlock = await ethers.provider.getBlockNumber();
-            const blockPeriod = Math.floor(currentBlock / 100);
+            const nonce = await contract.emergencyNonce();
             actionHash = ethers.solidityPackedKeccak256(
                 ["address", "uint256", "uint256"],
-                [targetAddress, transferAmount, blockPeriod]
+                [targetAddress, transferAmount, nonce]
             );
         });
 
@@ -91,11 +90,10 @@ describe("LegacyChain: Multi-Sig & Emergency Module Tests", function () {
             });
 
             // Generate action hash for transfer
-            const currentBlock = await ethers.provider.getBlockNumber();
-            const blockPeriod = Math.floor(currentBlock / 100);
+            const nonce = await contract.emergencyNonce();
             actionHash = ethers.solidityPackedKeccak256(
                 ["address", "uint256", "uint256"],
-                [targetAddress, transferAmount, blockPeriod]
+                [targetAddress, transferAmount, nonce]
             );
         });
 

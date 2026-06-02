@@ -41,6 +41,9 @@ contract InheritanceVault is VaultReentrancyGuard {
     uint256 public constant MAX_HEIRS = 10;
     uint256 public constant GRACE_PERIOD = 24 hours;
     string public constant VAULT_VERSION = "LegacyChain-v2";
+    uint8 public constant CASE_GRACE_ACTIVE = 4;
+    uint8 public constant CASE_CLAIMABLE = 7;
+    uint8 public constant CASE_RESOLVED = 8;
 
     address public factory;
     address public owner;
@@ -305,6 +308,7 @@ contract InheritanceVault is VaultReentrancyGuard {
         SpecificAsset storage item = specificWills[_index];
         require(!item.isClaimed, "Already claimed");
         require(item.designatedHeir != address(0), "Removed");
+        require(msg.sender == item.designatedHeir, "Not designated heir");
         item.isClaimed = true;
         if (item.isERC721) {
             IVaultERC721(item.assetAddress).transferFrom(owner, item.designatedHeir, item.tokenId);
@@ -320,6 +324,59 @@ contract InheritanceVault is VaultReentrancyGuard {
         (bool success, ) = payable(owner).call{value: balance}("");
         require(success, "Transfer failed");
         emit EmergencyWithdraw(balance);
+    }
+
+    bool public paused;
+
+    event ContractPaused(address indexed by, uint256 timestamp);
+    event ContractUnpaused(address indexed by, uint256 timestamp);
+    event OracleUpdated(address indexed previousOracle, address indexed newOracle);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event HeirDeactivated(uint256 indexed index, address indexed heir);
+    event PendingChangeCancelled(uint256 indexed index);
+
+    modifier whenNotPaused() {
+        require(!paused, "Contract is paused");
+        _;
+    }
+
+    function deactivateHeir(uint256 _index) external onlyOwner {
+        require(_index < heirs.length, "Invalid index");
+        require(heirs.length > 1, "Must have at least one heir");
+        heirs[_index].isActive = false;
+        emit HeirDeactivated(_index, heirs[_index].wallet);
+    }
+
+    function cancelPendingChange(uint256 _index) external onlyOwner {
+        require(pendingChanges[_index].exists, "No pending change");
+        delete pendingChanges[_index];
+        emit PendingChangeCancelled(_index);
+    }
+
+    function pause() external onlyOwner {
+        require(!paused, "Already paused");
+        paused = true;
+        emit ContractPaused(msg.sender, block.timestamp);
+    }
+
+    function unpause() external onlyOwner {
+        require(paused, "Not paused");
+        paused = false;
+        emit ContractUnpaused(msg.sender, block.timestamp);
+    }
+
+    function updateOracle(address _newOracle) external onlyOwner {
+        require(_newOracle != address(0), "Invalid oracle");
+        address previousOracle = oracle;
+        oracle = _newOracle;
+        emit OracleUpdated(previousOracle, _newOracle);
+    }
+
+    function transferOwnership(address _newOwner) external onlyOwner {
+        require(_newOwner != address(0), "Invalid owner");
+        address previousOwner = owner;
+        owner = _newOwner;
+        emit OwnershipTransferred(previousOwner, _newOwner);
     }
 
     function getAllHeirs() external view returns (Heir[] memory) {
@@ -347,7 +404,7 @@ contract InheritanceVault is VaultReentrancyGuard {
         require(deathConfirmedTime > 0, "Grace not started");
         uint8 caseStatus = IVaultOracle(oracle).getCaseStatus(owner);
         if (caseStatus != 0) {
-            require(caseStatus == 4 || caseStatus == 7 || caseStatus == 8, "Case blocked");
+            require(caseStatus == CASE_GRACE_ACTIVE || caseStatus == CASE_CLAIMABLE || caseStatus == CASE_RESOLVED, "Case blocked");
         }
         require(block.timestamp >= deathConfirmedTime + GRACE_PERIOD, "Grace active");
     }

@@ -56,16 +56,14 @@ describe("MultiHeirInheritance Security Tests", function () {
                 .to.be.revertedWith("Sadece sahip bu islemi yapabilir");
         });
 
-        it("Should allow only owner/oracle to call simulateOracleSignal()", async function () {
-            // Owner can call
-            await expect(contract.connect(owner).simulateOracleSignal()).to.not.be.reverted;
+        it("Should allow only oracle to call simulateOracleSignal()", async function () {
+            // Owner cannot call anymore due to security fix (S-3)
+            await expect(contract.connect(owner).simulateOracleSignal())
+                .to.be.revertedWith("Sadece Oracle bu islemi yapabilir");
 
-            // Reset
-            await contract.connect(owner).ping();
-
-            // Attacker cannot call (oracle artık kontrat adresi, signer olarak çağrılamaz)
+            // Attacker cannot call
             await expect(contract.connect(attacker).simulateOracleSignal())
-                .to.be.revertedWith("Yetkisiz Oracle");
+                .to.be.revertedWith("Sadece Oracle bu islemi yapabilir");
         });
 
         it("Should allow only owner to call emergencyWithdraw()", async function () {
@@ -445,9 +443,7 @@ describe("MultiHeirInheritance Security Tests", function () {
             await expect(contract.connect(owner).ping())
                 .to.emit(contract, "Pulse");
 
-            // OracleSignalReceived event (owner üzerinden simulateOracleSignal)
-            await expect(contract.connect(owner).simulateOracleSignal())
-                .to.emit(contract, "OracleSignalReceived");
+            // OracleSignalReceived event test removed as simulateOracleSignal is now onlyOracle
 
             // HeirAdded event
             await contract.connect(owner).ping(); // Reset

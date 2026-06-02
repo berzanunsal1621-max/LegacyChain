@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -99,7 +100,10 @@ function apiKeyAuth(req, res, next) {
         }
         return next();
     }
-    if (req.headers['x-api-key'] !== expectedKey) {
+    const provided = req.headers['x-api-key'] || '';
+    const expected = Buffer.from(expectedKey);
+    const received = Buffer.from(provided);
+    if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
         return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key.' });
     }
     next();
@@ -813,7 +817,7 @@ app.post('/api/notifications/test', apiKeyAuth, async (req, res) => {
     }
 });
 
-app.get('/api/signal-log', (req, res) => {
+app.get('/api/signal-log', apiKeyAuth, (req, res) => {
     res.json({ totalSignals: signalLog.length, signals: signalLog });
 });
 

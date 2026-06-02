@@ -129,7 +129,7 @@ describe("DecentralizedOracle: Extended Tests", function () {
         it("Should revert if unauthorized address tries to reset signals", async function () {
             await expect(
                 oracle.connect(nonAuth).resetSignals(nonAuth.address)
-            ).to.be.revertedWith("Only inheritance contract or owner can reset");
+            ).to.be.revertedWith("Only inheritance contract, owner, or registered vault can reset");
         });
 
         it("Should revert if setting zero address as inheritance contract", async function () {

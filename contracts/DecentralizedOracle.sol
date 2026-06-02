@@ -9,6 +9,7 @@ pragma solidity ^0.8.20;
 contract DecentralizedOracle {
     address public owner;
     address public inheritanceContract;
+    mapping(address => bool) public registeredVaults;
     
     // Authorities who can sign death signals (e.g., Hospital, Government, Relative)
     mapping(address => bool) public isAuthority;
@@ -46,6 +47,21 @@ contract DecentralizedOracle {
     function setInheritanceContract(address _contract) external onlyOwner {
         require(_contract != address(0), "Invalid address");
         inheritanceContract = _contract;
+    }
+
+    /**
+     * @notice Register a vault so it can reset signals
+     */
+    function registerVault(address _vault) external onlyOwner {
+        require(_vault != address(0), "Invalid vault address");
+        registeredVaults[_vault] = true;
+    }
+
+    /**
+     * @notice Unregister a vault
+     */
+    function unregisterVault(address _vault) external onlyOwner {
+        registeredVaults[_vault] = false;
     }
     
     /**
@@ -110,7 +126,10 @@ contract DecentralizedOracle {
      * @dev Only the registered inheritance contract can call this
      */
     function resetSignals(address _user) external {
-        require(msg.sender == inheritanceContract || msg.sender == owner, "Only inheritance contract or owner can reset");
+        require(
+            msg.sender == inheritanceContract || msg.sender == owner || registeredVaults[msg.sender],
+            "Only inheritance contract, owner, or registered vault can reset"
+        );
         signalCount[_user] = 0;
         for (uint256 i = 0; i < authorities.length; i++) {
             deathSignals[_user][authorities[i]] = false;
