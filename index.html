@@ -2842,7 +2842,15 @@
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
                                 {[1, 2, 3].map(id => (
                                     <div key={id} className="relative z-10 bg-white dark:bg-brand-panel p-8 rounded-[2rem] border border-gray-100 dark:border-gray-700 shadow-xl group hover:border-brand-blue transition-all">
-                                        <div className="text-5xl mb-6 group-hover:scale-110 transition-transform">{id === 1 ? "ğŸ›°ï¸" : id === 2 ? "â³" : "ğŸ”—"}</div>
+                                        <div className="w-16 h-16 mb-6 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform bg-blue-50 dark:bg-blue-900/30 text-brand-blue">
+                                            {id === 1 ? (
+                                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                                            ) : id === 2 ? (
+                                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                            ) : (
+                                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                                            )}
+                                        </div>
                                         <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">{translate(`architecture.step${id}_title`)}</h3>
                                         <p className="text-gray-600 dark:text-gray-400 leading-relaxed text-sm font-light">{translate(`architecture.step${id}_desc`)}</p>
 
