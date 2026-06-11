@@ -204,3 +204,4 @@ See [`oracle-backend/.env.example`](oracle-backend/.env.example) for the full li
 ## Author
 
 Berzan Unsal — Computer Engineering, Mugla Sitki Kocman University
+Mehmet Onder - Computer Engineering, Mugla Sitki Kocman University
